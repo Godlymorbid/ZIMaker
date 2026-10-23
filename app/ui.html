@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ZIM Creator</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%237a1f1f'/%3E%3Cpath d='M12 18c7-3 14-3 20 2v30c-6-5-13-5-20-2z' fill='%23f5eedc'/%3E%3Cpath d='M52 18c-7-3-14-3-20 2v30c6-5 13-5 20-2z' fill='%23fff'/%3E%3C/svg%3E">
+<style>
+:root{--bg:#f6f4ef;--card:#fff;--ink:#222;--mute:#666;--line:#ddd6c8;--acc:#7a1f1f;--acc2:#a33;--ok:#2e7d32;--bad:#b3261e}
+@media (prefers-color-scheme:dark){:root{--bg:#1b1a18;--card:#262421;--ink:#eee;--mute:#aaa;--line:#3b3833;--acc:#e08a7a;--acc2:#f0a090;--ok:#7bc67e;--bad:#ff8a80}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:860px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:24px;margin:8px 0 4px}
+.sub{color:var(--mute);margin:0 0 18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:14px 0}
+.card h2{font-size:16px;margin:0 0 10px}
+textarea,input[type=text]{width:100%;font:inherit;color:inherit;background:transparent;border:1px solid var(--line);border-radius:6px;padding:8px}
+textarea{min-height:80px;resize:vertical}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:6px;padding:7px 14px;cursor:pointer}
+button.primary{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600;padding:10px 22px}
+button:disabled{opacity:.5;cursor:default}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px}
+.opt{display:block;padding:6px 0}
+.opt small{display:block;color:var(--mute);margin-left:24px}
+.hint{color:var(--mute);font-size:13px}
+.items{margin:8px 0 0;padding:0;list-style:none}
+.items li{padding:6px 0;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:10px}
+.err{color:var(--bad)} .good{color:var(--ok)}
+.job{border-top:1px solid var(--line);padding:12px 0}
+.job:first-child{border-top:none}
+.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin:6px 0}
+.bar>div{height:100%;background:var(--acc);width:0;transition:width .4s}
+.bar.indef>div{width:30%;animation:slide 1.4s infinite ease-in-out}
+@keyframes slide{0%{margin-left:-30%}100%{margin-left:100%}}
+pre{white-space:pre-wrap;font-size:12px;max-height:260px;overflow:auto;background:var(--bg);padding:8px;border-radius:6px}
+.status{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+#setup{display:none}
+details summary{cursor:pointer;color:var(--mute);font-size:13px}
+header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+#drop{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:10;
+  background:color-mix(in srgb,var(--bg) 85%,transparent);border:4px dashed var(--acc);font-size:22px;font-weight:600;color:var(--acc);text-align:center;padding:20px}
+body.dragging #drop{display:flex}
+.dropzone{border:2px dashed var(--line);border-radius:8px;padding:14px;text-align:center;color:var(--mute);margin-top:12px}
+#stopped{display:none;text-align:center;padding:80px 16px}
+</style>
+</head>
+<body>
+<div id="drop">Drop EPUB / PDF files or archive.org links</div>
+<div id="stopped"><h1>ZIM Creator has stopped</h1><p class="sub">You can close this window. Start it again from the desktop icon.</p></div>
+<main>
+  <header>
+    <div><h1>ZIM Creator</h1>
+    <p class="sub">Turn websites, archive.org books, ebooks, documents and pictures into ZIM files for Kiwix.</p></div>
+    <button id="quit" title="Stop ZIM Creator">Quit</button>
+  </header>
+  <div class="card" id="setup"></div>
+
+  <div class="card">
+    <h2>1. What to convert</h2>
+    <label class="hint" for="links">Web addresses, one per line: any website, or archive.org books</label>
+    <textarea id="links" placeholder="https://example.com/guide/&#10;https://archive.org/details/encyclopaediabri01chisrich"></textarea>
+    <div class="row"><button id="check">Check links</button><span class="hint" id="checkmsg"></span></div>
+    <ul class="items" id="found"></ul>
+    <div class="dropzone">Drag files, or links from your browser, anywhere onto this window — or
+      <button id="pick">Choose files…</button>
+      <input type="file" id="file" multiple hidden></div>
+    <details style="margin-top:10px"><summary>Which files work?</summary>
+      <ul class="hint" style="margin:6px 0 0;padding-left:18px">
+        <li><b>Ebooks:</b> EPUB, MOBI, AZW, AZW3, FB2</li>
+        <li><b>Documents:</b> Word (DOCX), OpenDocument (ODT), RTF, PowerPoint (PPTX), Excel (XLSX), CSV, Markdown, plain text, HTML, Jupyter notebooks, LaTeX, and more</li>
+        <li><b>Page-based:</b> PDF, XPS, CBZ comics</li>
+        <li><b>Pictures:</b> JPG, PNG, GIF, WEBP, TIFF, BMP, SVG (all pictures in one job become one gallery)</li>
+        <li><b>ZIP files:</b> a saved website folder, a folder of pictures (like a comic), or a mix of the files above</li>
+        <li>Not supported: old Office files (.doc, .xls, .ppt — save them in the newer format first), DjVu, CBR/RAR, audio and video</li>
+      </ul></details>
+    <ul class="items" id="files"></ul>
+    <details style="margin-top:10px"><summary>Very large file? Use its path instead of uploading</summary>
+      <div class="row"><input type="text" id="paths" placeholder="C:\Users\you\Downloads\book.pdf  (separate several with ;)"></div>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2>2. Options</h2>
+    <div><b>Page images</b></div>
+    <label class="opt"><input type="radio" name="mode" value="pictures" checked> Only pages with pictures
+      <small>Text on every page; the scan is shown only where there's an illustration, map or plate. Small files.</small></label>
+    <label class="opt"><input type="radio" name="mode" value="all"> Every page as an image
+      <small>The original scan of every page, with its text underneath. Large files.</small></label>
+    <label class="opt"><input type="radio" name="mode" value="none"> Text only
+      <small>No images at all. Smallest files.</small></label>
+    <div style="margin-top:10px"><b>Websites</b></div>
+    <div class="row" style="margin-top:4px">Save up to <input type="text" id="maxpages" value="300" style="width:90px"> pages</div>
+    <label class="opt"><input type="radio" name="scope" value="site" checked> The whole site</label>
+    <label class="opt"><input type="radio" name="scope" value="section"> Only the section I linked to
+      <small>e.g. for https://example.com/docs/ only pages under /docs/</small></label>
+    <div class="hint">Links to pages that aren't saved keep pointing at the live site. Sites that build their pages with JavaScript may not come out well. Audio and video aren't saved.</div>
+    <div style="margin-top:10px"><b>Output</b></div>
+    <label class="opt"><input type="radio" name="combine" value="0" checked> One ZIM per book / volume</label>
+    <label class="opt"><input type="radio" name="combine" value="1"> Combine everything into one ZIM
+      <small>One file with a home page listing every book, and search across all of them.</small></label>
+    <div style="margin-top:10px"><b>Title</b> <span class="hint">(optional; used for a combined or single file)</span></div>
+    <input type="text" id="title" placeholder="Leave blank to use the book's own title">
+    <div style="margin-top:10px"><b>Save to folder</b></div>
+    <input type="text" id="outdir">
+    <div class="hint">Tip: a Proton Drive or OneDrive folder works too.</div>
+    <div class="row" style="margin-top:16px"><button class="primary" id="build">Build ZIM</button><span id="buildmsg" class="hint"></span></div>
+  </div>
+
+  <div class="card">
+    <h2>Jobs</h2>
+    <div id="jobs"><p class="hint">Nothing yet.</p></div>
+  </div>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let files = [];
+const store = {get(k){try{return localStorage.getItem(k)}catch(e){return null}}, set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
+
+async function api(path, opts={}) {
+  const r = await fetch(path, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+$("#check").onclick = async () => {
+  const text = $("#links").value.trim();
+  if (!text) return;
+  $("#checkmsg").textContent = "Checking…"; $("#found").innerHTML = "";
+  try {
+    const {items} = await api("/api/inspect", {method:"POST", body: JSON.stringify({text})});
+    $("#found").innerHTML = items.map(it => it.error
+      ? `<li><span>${esc(it.input)}</span><span class="err">${esc(it.error)}</span></li>`
+      : it.kind === "web"
+      ? `<li><span><b>${esc(it.title)}</b><br><span class="hint">${esc(it.input)}</span></span>
+         <span class="hint">website · up to ${esc($("#maxpages").value)} pages</span></li>`
+      : `<li><span><b>${esc(it.title)}</b>${it.books.length > 1 ? `<br><span class="hint">${it.books.length} books: ${it.books.map(b => esc(b.title)).join("; ")}</span>` : ""}</span>
+         <span class="hint">archive.org · ${it.books.reduce((a, b) => a + b.scans_gb, 0).toFixed(1)} GB of scans</span></li>`).join("");
+    $("#checkmsg").textContent = "";
+  } catch (e) { $("#checkmsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+};
+
+$("#pick").onclick = () => $("#file").click();
+$("#file").onchange = async () => { await addFiles([...$("#file").files]); $("#file").value = ""; };
+
+async function addFiles(list) {
+  for (const f of list) {
+    const entry = {name: f.name, size: f.size, state: "uploading"};
+    files.push(entry); renderFiles();
+    try {
+      const r = await api("/api/upload?name=" + encodeURIComponent(f.name), {method: "PUT", body: f});
+      Object.assign(entry, {path: r.path, state: "ready"});
+    } catch (e) { entry.state = "error: " + e.message; }
+    renderFiles();
+  }
+}
+
+// drag and drop: files anywhere on the window, or links dragged from a browser
+let depth = 0;
+window.addEventListener("dragenter", e => { e.preventDefault(); depth++; document.body.classList.add("dragging"); });
+window.addEventListener("dragover", e => e.preventDefault());
+window.addEventListener("dragleave", () => { if (--depth <= 0) { depth = 0; document.body.classList.remove("dragging"); } });
+window.addEventListener("drop", e => {
+  e.preventDefault(); depth = 0; document.body.classList.remove("dragging");
+  const dropped = [...(e.dataTransfer.files || [])];
+  if (dropped.length) { addFiles(dropped); return; }
+  const text = e.dataTransfer.getData("text/uri-list") || e.dataTransfer.getData("text/plain") || "";
+  const links = text.split(/\s+/).filter(s => /^https?:\/\//i.test(s));
+  if (!links.length) { $("#checkmsg").innerHTML = '<span class="err">That doesn\'t look like a web address.</span>'; return; }
+  const box = $("#links");
+  box.value = (box.value.trim() ? box.value.trim() + "\n" : "") + links.join("\n");
+  $("#check").click();
+});
+
+let stopped = false;
+$("#quit").onclick = async () => {
+  let r = await api("/api/quit", {method: "POST", body: "{}"}).catch(() => ({}));
+  if (r.busy) {
+    if (!confirm("A conversion is still running. Quit anyway and cancel it?\n\n(If you just close the window instead, ZIM Creator keeps running until the job is finished.)")) return;
+    await api("/api/quit", {method: "POST", body: JSON.stringify({force: true})}).catch(() => {});
+  }
+  stopped = true;
+  document.querySelector("main").style.display = "none"; $("#stopped").style.display = "block";
+};
+function renderFiles() {
+  $("#files").innerHTML = files.map((f, i) => `<li><span>${esc(f.name)} <span class="hint">${(f.size / 1e6).toFixed(1)} MB</span></span>
+    <span>${f.state === "ready" ? '<span class="good">ready</span>' : esc(f.state)} <button data-i="${i}" class="rm">Remove</button></span></li>`).join("");
+  document.querySelectorAll(".rm").forEach(b => b.onclick = () => { files.splice(+b.dataset.i, 1); renderFiles(); });
+}
+
+$("#outdir").value = store.get("outdir") || "";
+$("#build").onclick = async () => {
+  const body = {
+    links: $("#links").value,
+    files: files.filter(f => f.state === "ready").map(f => ({path: f.path, name: f.name})),
+    paths: $("#paths").value.split(";").map(s => s.trim()).filter(Boolean),
+    mode: document.querySelector("input[name=mode]:checked").value,
+    combine: document.querySelector("input[name=combine]:checked").value === "1",
+    title: $("#title").value,
+    output_dir: $("#outdir").value.trim(),
+    max_pages: parseInt($("#maxpages").value, 10) || 300,
+    scope: document.querySelector("input[name=scope]:checked").value,
+  };
+  if (files.some(f => f.state === "uploading")) { $("#buildmsg").textContent = "Wait for uploads to finish."; return; }
+  store.set("outdir", body.output_dir);
+  $("#build").disabled = true; $("#buildmsg").textContent = "";
+  try {
+    await api("/api/jobs", {method: "POST", body: JSON.stringify(body)});
+    $("#buildmsg").innerHTML = '<span class="good">Started — see Jobs below.</span>';
+    $("#links").value = ""; $("#found").innerHTML = ""; files = []; renderFiles(); $("#paths").value = ""; $("#title").value = "";
+    poll();
+  } catch (e) { $("#buildmsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  $("#build").disabled = false;
+};
+
+const openLogs = new Set();
+function jobHtml(j) {
+  const pct = j.total ? Math.min(100, Math.round(100 * j.done / j.total)) : null;
+  const running = j.status === "running" || j.status === "queued";
+  const colour = {done: "good", failed: "err", interrupted: "err", cancelled: "hint"}[j.status] || "";
+  const res = j.result || {};
+  const fileList = (res.files || []).map(f => `<li><span>${esc(f.path)} <span class="hint">${(f.size / 1e6).toFixed(1)} MB${f.check === "fail" ? " · validation warnings" : ""}</span></span>
+      <button class="open" data-p="${esc(f.path)}">Open folder</button></li>`).join("");
+  const errs = (res.errors || []).map(e => `<div class="err">${esc(e)}</div>`).join("");
+  return `<div class="job" data-id="${j.id}">
+    <div class="row" style="justify-content:space-between;margin:0"><b>${esc(j.label)}</b>
+      <span class="status ${colour}">${esc(j.status)}</span></div>
+    <div class="hint">${esc(j.stage)}${pct !== null && running ? ` — ${j.done} / ${j.total}` : ""}</div>
+    ${running ? `<div class="bar ${pct === null ? "indef" : ""}"><div style="width:${pct ?? 30}%"></div></div>` : ""}
+    ${fileList ? `<ul class="items">${fileList}</ul>` : ""}${errs}
+    <details ${openLogs.has(j.id) ? "open" : ""} data-log="${j.id}"><summary>Log</summary><pre>${esc(j.log)}</pre></details>
+    <div class="row">${running ? `<button class="cancel" data-id="${j.id}">Cancel</button>` : `<button class="del" data-id="${j.id}">Remove from list</button>`}</div>
+  </div>`;
+}
+
+async function poll() {
+  if (stopped) return;
+  try {
+    const s = await api("/api/status");
+    const st = s.setup;
+    $("#setup").style.display = st.state === "ready" ? "none" : "block";
+    $("#setup").innerHTML = st.state === "error" ? `<span class="err">${esc(st.message)}</span>`
+      : `<b>Getting ready…</b> <span class="hint">${esc(st.message || "")}</span><div class="bar indef"><div></div></div>`;
+    if (!$("#outdir").value && s.default_output) $("#outdir").value = s.default_output;
+    if (s.windows === false) $("#paths").placeholder = "/home/you/Downloads/book.pdf  (separate several with ;)";
+    $("#jobs").innerHTML = s.jobs.length ? s.jobs.map(jobHtml).join("") : '<p class="hint">Nothing yet.</p>';
+    document.querySelectorAll("details[data-log]").forEach(d => d.ontoggle = () => d.open ? openLogs.add(d.dataset.log) : openLogs.delete(d.dataset.log));
+    document.querySelectorAll(".open").forEach(b => b.onclick = () => api("/api/open", {method: "POST", body: JSON.stringify({path: b.dataset.p})}));
+    document.querySelectorAll(".cancel").forEach(b => b.onclick = () => api(`/api/jobs/${b.dataset.id}/cancel`, {method: "POST"}).then(poll));
+    document.querySelectorAll(".del").forEach(b => b.onclick = () => api(`/api/jobs/${b.dataset.id}/delete`, {method: "POST"}).then(poll));
+  } catch (e) {
+    $("#setup").style.display = "block";
+    $("#setup").innerHTML = '<span class="err">ZIM Creator isn\'t running any more. Close this window and start it again from the desktop icon.</span>';
+  }
+}
+poll(); setInterval(poll, 2000);
+</script>
+</body>
+</html>
