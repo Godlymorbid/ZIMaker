@@ -1,7 +1,7 @@
 # ZIMaker installer (per user, no admin needed). Run via "Install ZIMaker.cmd".
 param(
   [string]$Source = (Split-Path -Parent $PSScriptRoot),
-  [switch]$Quiet   # no questions (used for automated installs)
+  [switch]$Quiet   # no questions (used for automated installs and the in-app updater)
 )
 $ErrorActionPreference = 'Stop'
 $Dest = Join-Path $env:LOCALAPPDATA 'Programs\ZIMaker'
@@ -13,7 +13,7 @@ function To-Wsl($p) { '/mnt/' + $p.Substring(0, 1).ToLower() + ($p.Substring(2) 
 function Ask($q) { if ($Quiet) { return $true }; $a = Read-Host "$q [Y/n]"; return ($a -notmatch '^[nN]') }
 
 Write-Host "ZIMaker installer" -ForegroundColor Yellow
-Write-Host "Turns archive.org books, EPUBs and PDFs into ZIM files for Kiwix."
+Write-Host "Turns websites, archive.org books, ebooks, documents and pictures into ZIM files for Kiwix."
 
 # 1. WSL with a Linux distribution
 Step "Checking WSL (Windows Subsystem for Linux)"

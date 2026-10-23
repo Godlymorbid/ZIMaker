@@ -43,17 +43,25 @@ header{display:flex;justify-content:space-between;align-items:flex-start;gap:12p
 body.dragging #drop{display:flex}
 .dropzone{border:2px dashed var(--line);border-radius:8px;padding:14px;text-align:center;color:var(--mute);margin-top:12px}
 #stopped{display:none;text-align:center;padding:80px 16px}
+#update{display:none;border-color:var(--acc)}
+#updating{position:fixed;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;z-index:20;
+  background:var(--bg);text-align:center;padding:20px}
+.hdr-btns{display:flex;gap:8px;flex-shrink:0}
 </style>
 </head>
 <body>
-<div id="drop">Drop EPUB / PDF files or archive.org links</div>
+<div id="drop">Drop files or web links</div>
 <div id="stopped"><h1>ZIMaker has stopped</h1><p class="sub">You can close this window. Start it again from the desktop icon.</p></div>
+<div id="updating"><h1>Updating ZIMaker…</h1><p class="sub" id="updmsg">This takes about a minute. This window will refresh by itself.</p>
+  <div class="bar indef" style="width:260px"><div></div></div></div>
 <main>
   <header>
     <div><h1>ZIMaker</h1>
     <p class="sub">Turn websites, archive.org books, ebooks, documents and pictures into ZIM files for Kiwix.</p></div>
-    <button id="quit" title="Stop ZIMaker">Quit</button>
+    <div class="hdr-btns"><button id="checkupd" title="Look for a newer version on GitHub">Check for updates</button>
+      <button id="quit" title="Stop ZIMaker">Quit</button></div>
   </header>
+  <div class="card" id="update"></div>
   <div class="card" id="setup"></div>
 
   <div class="card">
@@ -238,11 +246,50 @@ function jobHtml(j) {
   </div>`;
 }
 
+// ---- updates from GitHub
+let updateDismissed = false, updating = false, checkedOnce = false;
+function showUpdate(html, autoHide) {
+  $("#update").innerHTML = html; $("#update").style.display = html ? "block" : "none";
+  if (autoHide) setTimeout(() => { if ($("#update").innerHTML === html) showUpdate(""); }, 6000);
+}
+async function checkUpdate(force) {
+  if (force) showUpdate('<span class="hint">Checking for updates…</span>');
+  let u;
+  try { u = await api("/api/update" + (force ? "?force=1" : "")); } catch (e) { u = {error: e.message}; }
+  if (u.available && (force || !updateDismissed)) {
+    showUpdate(`<b>A new version of ZIMaker is available.</b> <span class="hint">Updated ${esc(u.date)}: ${esc(u.message)}</span>
+      <div class="row"><button class="primary" id="doupdate">Update now</button><button id="later">Later</button></div>`);
+    $("#doupdate").onclick = doUpdate;
+    $("#later").onclick = () => { updateDismissed = true; showUpdate(""); };
+  } else if (force) {
+    showUpdate(u.error ? `<span class="err">${esc(u.error)}</span>` : '<span class="good">You have the latest version of ZIMaker.</span>', true);
+  }
+}
+$("#checkupd").onclick = () => checkUpdate(true);
+async function doUpdate() {
+  const before = (await api("/api/ping").catch(() => ({}))).started;
+  $("#doupdate").disabled = true;
+  const r = await api("/api/update/apply", {method: "POST", body: "{}"}).catch(e => ({error: e.message}));
+  if (r.busy) { showUpdate('<span class="err">A conversion is running. Update when it has finished (or cancel it first).</span>'); return; }
+  if (r.error) { showUpdate(`<span class="err">${esc(r.error)}</span>`); return; }
+  updating = true;
+  $("#updating").style.display = "flex";
+  const t0 = Date.now();
+  while (Date.now() - t0 < 5 * 60 * 1000) {
+    await new Promise(res => setTimeout(res, 2000));
+    const p = await fetch("/api/ping").then(x => x.json()).catch(() => null);
+    if (p && p.started && p.started !== before) { location.reload(); return; }
+  }
+  $("#updmsg").innerHTML = 'The update is taking longer than expected. Close this window and open ZIMaker again.<br>' +
+    'Details are in <code>%TEMP%\\ZIMaker-update.log</code> (Windows) or <code>~/.zimaker/update.log</code> (Linux).';
+}
+
 async function poll() {
-  if (stopped) return;
+  if (stopped || updating) return;
   try {
     const s = await api("/api/status");
     const st = s.setup;
+    if (st.state === "ready" && !checkedOnce) { checkedOnce = true; checkUpdate(false); }
     $("#setup").style.display = st.state === "ready" ? "none" : "block";
     $("#setup").innerHTML = st.state === "error" ? `<span class="err">${esc(st.message)}</span>`
       : `<b>Getting ready…</b> <span class="hint">${esc(st.message || "")}</span><div class="bar indef"><div></div></div>`;
