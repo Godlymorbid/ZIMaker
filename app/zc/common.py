@@ -12,12 +12,18 @@ import unicodedata
 import urllib.error
 import urllib.request
 
-HOME = os.path.expanduser("~/.zim-creator")
+HOME = os.path.expanduser("~/.zimaker")
+_OLD_HOME = os.path.expanduser("~/.zim-creator")  # before the rename to ZIMaker: keep libraries and job history
+if not os.path.exists(HOME) and os.path.isdir(_OLD_HOME):
+    try:
+        os.rename(_OLD_HOME, HOME)
+    except OSError:
+        pass
 LIB = os.path.join(HOME, "lib")            # Python wheels unpacked here (libzim, Pillow, numpy, PyMuPDF)
 TOOLS = os.path.join(HOME, "zim-tools")    # openZIM zim-tools (zimcheck)
 JOBS = os.path.join(HOME, "jobs")
 UPLOADS = os.path.join(HOME, "uploads")
-UA = {"User-Agent": "zim-creator/1.0 (personal archiving tool)"}
+UA = {"User-Agent": "zimaker/1.0 (personal archiving tool)"}
 
 # How many pages are processed at once. WSL often has only ~3 GB of RAM, so keep this modest.
 WORKERS = max(1, min(3, (os.cpu_count() or 2) - 1))
@@ -186,9 +192,9 @@ def lang3(v):
 
 # ---------------------------------------------------------------- paths
 # On Windows the converter runs inside WSL and shows Windows paths; on Linux it runs natively.
-# ZIM_CREATOR_NATIVE=1 forces the native-Linux behaviour (for testing inside WSL).
+# ZIMAKER_NATIVE=1 forces the native-Linux behaviour (for testing inside WSL).
 
-IS_WSL = (os.environ.get("ZIM_CREATOR_NATIVE") != "1"
+IS_WSL = (os.environ.get("ZIMAKER_NATIVE") != "1"
           and (os.path.exists("/proc/sys/fs/binfmt_misc/WSLInterop") or "microsoft" in os.uname().release.lower()))
 
 
@@ -214,9 +220,9 @@ def default_output():
     if IS_WSL:
         prof = windows_profile()
         if prof:
-            return prof + "\\Documents\\ZIM Creator"
+            return prof + "\\Documents\\ZIMaker"
     docs = os.path.expanduser("~/Documents")
-    return os.path.join(docs if os.path.isdir(docs) else os.path.expanduser("~"), "ZIM Creator")
+    return os.path.join(docs if os.path.isdir(docs) else os.path.expanduser("~"), "ZIMaker")
 
 
 def open_folder(p):

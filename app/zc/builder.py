@@ -120,12 +120,12 @@ def build(log, volumes, out_path, title=None):
             "Name": C.slug(title, 50),
             "Language": lang,
             "Creator": C.clip(v0.get("creator") or "Unknown", 200),
-            "Publisher": C.clip(v0.get("publisher") or "ZIM Creator", 200),
+            "Publisher": C.clip(v0.get("publisher") or "ZIMaker", 200),
             "Date": datetime.date.today().isoformat(),
             "Description": C.clip(title if len(title) <= 80 else title, 80),
-            "LongDescription": C.clip(f"{title}. Converted with ZIM Creator from: "
+            "LongDescription": C.clip(f"{title}. Converted with ZIMaker from: "
                                       + "; ".join(v.get("source", "") for _, v in volumes), 4000),
-            "Tags": "zim-creator;_videos:no" + ("" if any_images else ";_pictures:no"),
+            "Tags": "zimaker;_videos:no" + ("" if any_images else ";_pictures:no"),
         }
         for k, v in meta.items():
             if v:
@@ -214,11 +214,13 @@ def _emit_site(c, It, vdir, vol, pre, multi):
             pages.append(f)
     index_path = f"{pre}index"
     pages.sort(key=lambda f: (f["path"] != vol["main"], f["path"]))
-    items = "".join(f'<li><a href="{html.escape(_rel(pre + f["path"], index_path))}">'
+    def link(p):  # %-encode like the crawler does, so ' & : ? never confuse a reader
+        return urllib.parse.quote(_rel(pre + p, index_path), safe="/-._~!$()*+,;=@")
+    items = "".join(f'<li><a href="{link(f["path"])}">'
                     f'{html.escape(f.get("title") or f["path"])}</a></li>' for f in pages)
     back = '<nav class="pg"><a href="../index">All</a></nav>' if multi else ""
     body = (f"{back}<h1>{html.escape(vol['title'])}</h1>"
-            + f'<p><a href="{html.escape(_rel(pre + vol["main"], index_path))}">Open the home page →</a></p>'
+            + f'<p><a href="{link(vol["main"])}">Open the home page →</a></p>'
             + f'<p class="note">Saved from {html.escape(vol.get("source", ""))} · {len(pages)} pages. '
             + "Links to pages that weren't saved still point to the live site.</p>"
             + f'<ul class="toc">{items}</ul>')

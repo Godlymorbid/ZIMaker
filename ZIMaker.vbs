@@ -1,4 +1,4 @@
-' ZIM Creator launcher: starts the converter (hidden, in WSL) and opens it in its own app window.
+' ZIMaker launcher: starts the converter (hidden, in WSL) and opens it in its own app window.
 ' The converter stops by itself once the window is closed and no conversion is running.
 Option Explicit
 Dim sh, fso, dir, wslDir, url, i
@@ -16,9 +16,9 @@ If Not IsUp() Then
   Next
 End If
 If Not IsUp() Then
-  MsgBox "ZIM Creator didn't start." & vbCrLf & vbCrLf & _
-         "Run 'Start ZIM Creator (with console).cmd' in " & dir & " to see what went wrong.", _
-         vbExclamation, "ZIM Creator"
+  MsgBox "ZIMaker didn't start." & vbCrLf & vbCrLf & _
+         "Run 'Start ZIMaker (with console).cmd' in " & dir & " to see what went wrong.", _
+         vbExclamation, "ZIMaker"
   WScript.Quit 1
 End If
 

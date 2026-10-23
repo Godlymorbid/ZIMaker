@@ -1,4 +1,4 @@
-"""First-run setup: fetch the Python libraries and openZIM tools into ~/.zim-creator (no sudo needed).
+"""First-run setup: fetch the Python libraries and openZIM tools into ~/.zimaker (no sudo needed).
 
 Wheels come from PyPI and are unpacked straight into LIB; zim-tools comes from download.openzim.org.
 """

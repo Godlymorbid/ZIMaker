@@ -1,10 +1,10 @@
-# ZIM Creator installer (per user, no admin needed). Run via "Install ZIM Creator.cmd".
+# ZIMaker installer (per user, no admin needed). Run via "Install ZIMaker.cmd".
 param(
   [string]$Source = (Split-Path -Parent $PSScriptRoot),
   [switch]$Quiet   # no questions (used for automated installs)
 )
 $ErrorActionPreference = 'Stop'
-$Dest = Join-Path $env:LOCALAPPDATA 'Programs\ZIM Creator'
+$Dest = Join-Path $env:LOCALAPPDATA 'Programs\ZIMaker'
 $Source = (Resolve-Path $Source).Path.TrimEnd('\')
 
 function Step($m) { Write-Host ""; Write-Host "== $m" -ForegroundColor Cyan }
@@ -12,7 +12,7 @@ function Fail($m) { Write-Host ""; Write-Host $m -ForegroundColor Red; exit 1 }
 function To-Wsl($p) { '/mnt/' + $p.Substring(0, 1).ToLower() + ($p.Substring(2) -replace '\\', '/') }
 function Ask($q) { if ($Quiet) { return $true }; $a = Read-Host "$q [Y/n]"; return ($a -notmatch '^[nN]') }
 
-Write-Host "ZIM Creator installer" -ForegroundColor Yellow
+Write-Host "ZIMaker installer" -ForegroundColor Yellow
 Write-Host "Turns archive.org books, EPUBs and PDFs into ZIM files for Kiwix."
 
 # 1. WSL with a Linux distribution
@@ -20,14 +20,14 @@ Step "Checking WSL (Windows Subsystem for Linux)"
 $ok = $false
 try { $out = & wsl.exe -e sh -c "echo zc-ok" 2>$null; $ok = (($out -join '') -match 'zc-ok') } catch {}
 if (-not $ok) {
-  Write-Host "ZIM Creator runs its converter in WSL, which isn't set up on this PC yet."
+  Write-Host "ZIMaker runs its converter in WSL, which isn't set up on this PC yet."
   if (Ask "Install WSL with Ubuntu now? (needs administrator approval, then a restart)") {
     try { Start-Process wsl.exe -ArgumentList '--install', '-d', 'Ubuntu' -Verb RunAs -Wait } catch { Fail "WSL install was cancelled or failed: $_" }
     Write-Host ""
     Write-Host "Next:" -ForegroundColor Yellow
     Write-Host " 1. Restart the PC."
     Write-Host " 2. Open 'Ubuntu' from the Start menu once and pick a username and password."
-    Write-Host " 3. Run 'Install ZIM Creator' again."
+    Write-Host " 3. Run 'Install ZIMaker' again."
     exit 2
   }
   Fail "WSL is required. You can install it later with:  wsl --install -d Ubuntu"
@@ -67,18 +67,32 @@ Step "Creating shortcuts"
 function New-Shortcut($lnk) {
   $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
   $s.TargetPath = Join-Path $env:WINDIR 'System32\wscript.exe'
-  $s.Arguments = '"' + (Join-Path $Dest 'ZIM Creator.vbs') + '"'
+  $s.Arguments = '"' + (Join-Path $Dest 'ZIMaker.vbs') + '"'
   $s.WorkingDirectory = $Dest
   $s.IconLocation = Join-Path $Dest 'app\icon.ico'
-  $s.Description = 'Turn archive.org books, EPUBs and PDFs into ZIM files'
+  $s.Description = 'Turn websites, books, documents and pictures into ZIM files for Kiwix'
   $s.Save()
   Write-Host "  $lnk"
 }
-New-Shortcut (Join-Path ([Environment]::GetFolderPath('Desktop')) 'ZIM Creator.lnk')
-New-Shortcut (Join-Path ([Environment]::GetFolderPath('Programs')) 'ZIM Creator.lnk')
+New-Shortcut (Join-Path ([Environment]::GetFolderPath('Desktop')) 'ZIMaker.lnk')
+New-Shortcut (Join-Path ([Environment]::GetFolderPath('Programs')) 'ZIMaker.lnk')
+
+# 6. Remove the old install from before the rename ("ZIM Creator"), if there is one
+$old = Join-Path $env:LOCALAPPDATA 'Programs\ZIM Creator'
+foreach ($folder in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs'))) {
+  $lnk = Join-Path $folder 'ZIM Creator.lnk'
+  if (Test-Path $lnk) {
+    $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
+    if ($s.Arguments -like "*$old*") { Remove-Item $lnk -Force; Write-Host "  removed old shortcut $lnk" }
+  }
+}
+if ((Test-Path $old) -and (Test-Path (Join-Path $old 'ZIM Creator.vbs'))) {
+  Remove-Item -LiteralPath $old -Recurse -Force -ErrorAction SilentlyContinue
+  Write-Host "  removed old install $old"
+}
 
 Write-Host ""
-Write-Host "ZIM Creator is installed." -ForegroundColor Green
-Write-Host "Open it from the desktop icon or the Start menu. To remove it, run 'Uninstall ZIM Creator' in $Dest."
-if (-not $Quiet -and (Ask "Open ZIM Creator now?")) { Start-Process wscript.exe -ArgumentList ('"' + (Join-Path $Dest 'ZIM Creator.vbs') + '"') }
+Write-Host "ZIMaker is installed." -ForegroundColor Green
+Write-Host "Open it from the desktop icon or the Start menu. To remove it, run 'Uninstall ZIMaker' in $Dest."
+if (-not $Quiet -and (Ask "Open ZIMaker now?")) { Start-Process wscript.exe -ArgumentList ('"' + (Join-Path $Dest 'ZIMaker.vbs') + '"') }
 exit 0

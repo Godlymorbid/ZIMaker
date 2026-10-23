@@ -1,24 +1,27 @@
 # ZIMaker
+
 Turns websites, archive.org books, ebooks, documents and pictures into ZIM files for Kiwix. It runs on **Windows** and **Linux**.
 
 ## Install it (or share it)
 
+**Download:** on the [GitHub page](https://github.com/Godlymorbid/ZIMaker), click the green **Code** button, then **Download ZIP**. You get `ZIMaker-main.zip`.
+
 ### Windows
 
-1. Unzip `ZIM Creator.zip` anywhere.
-2. Double-click **`Install ZIM Creator.cmd`**.
+1. Unzip the downloaded zip anywhere.
+2. Double-click **`Install ZIMaker.cmd`**.
 
 The installer:
 
 - checks for WSL (Windows Subsystem for Linux), and offers to install it with Ubuntu if it's missing;
 - checks for Python 3.9 or newer inside WSL;
-- installs ZIM Creator for the current Windows user in `%LOCALAPPDATA%\Programs\ZIM Creator` (no administrator rights needed);
+- installs ZIMaker for the current Windows user in `%LOCALAPPDATA%\Programs\ZIMaker` (no administrator rights needed);
 - downloads the libraries it needs, about 150 MB;
-- adds a **ZIM Creator** icon to the desktop and to the Start menu.
+- adds a **ZIMaker** icon to the desktop and to the Start menu.
 
 Installing WSL needs administrator approval and a restart. After the restart, open **Ubuntu** from the Start menu once to finish its setup, then run the installer again.
 
-To update, run a newer copy's installer over the old one. To remove ZIM Creator, run `Uninstall ZIM Creator.cmd` in the install folder. Uninstalling never touches the ZIM files you made.
+To update, run a newer copy's installer over the old one. It also replaces an older install called "ZIM Creator", keeping its job history. To remove ZIMaker, run `Uninstall ZIMaker.cmd` in the install folder. Uninstalling never touches the ZIM files you made.
 
 Windows may warn about running scripts from a downloaded zip ("Windows protected your PC"). Click **More info → Run anyway**.
 
@@ -26,28 +29,28 @@ Requirements: Windows 10 or 11 with WSL 2. It works on Intel/AMD and ARM PCs. Mi
 
 ### Linux
 
-1. Unzip `ZIM Creator.zip`.
-2. In a terminal, in the unzipped folder, run: `sh install.sh`
+1. Unzip the downloaded zip, or clone the repository: `git clone https://github.com/Godlymorbid/ZIMaker`
+2. In a terminal, in that folder, run: `sh install.sh`
 
-It installs into your home folder, so it doesn't need root. It downloads the libraries (about 150 MB) and adds **ZIM Creator** to your applications menu, a desktop icon where your desktop supports one, and a `zim-creator` command.
+It installs into your home folder, so it doesn't need root. It downloads the libraries (about 150 MB) and adds **ZIMaker** to your applications menu, a desktop icon where your desktop supports one, and a `zimaker` command.
 
-To remove it, run `sh ~/.local/share/zim-creator/uninstall.sh`.
+To remove it, run `sh ~/.local/share/zimaker/uninstall.sh`.
 
 Requirements: Python 3.9 or newer, which most distributions include, on a 64-bit Intel/AMD or ARM PC. If Chrome, Chromium, Edge or Brave is installed, the app opens in its own window; otherwise it opens in your default browser.
 
 ## Start it
 
-- **Windows:** double-click the **ZIM Creator** icon on the desktop or in the Start menu.
+- **Windows:** double-click the **ZIMaker** icon on the desktop or in the Start menu.
   - To recreate the desktop icon, run `Create desktop shortcut.cmd`.
-  - You can also double-click `ZIM Creator.vbs` in the install folder.
-- **Linux:** open **ZIM Creator** from your applications menu, or run `zim-creator`.
+  - You can also double-click `ZIMaker.vbs` in the install folder.
+- **Linux:** open **ZIMaker** from your applications menu, or run `zimaker`.
 
-**Stopping:** close the window, and ZIM Creator stops by itself about 2–3 minutes later. If a conversion is still running, it finishes the conversion first and then stops. The **Quit** button stops it straight away; it asks first if a conversion is running.
+**Stopping:** close the window, and ZIMaker stops by itself about 2–3 minutes later. If a conversion is still running, it finishes the conversion first and then stops. The **Quit** button stops it straight away; it asks first if a conversion is running.
 
 **Troubleshooting:**
 
-- **Windows:** `Start ZIM Creator (with console).cmd` runs the same app with a visible console that shows any errors.
-- **Linux:** errors are logged to `~/.zim-creator/server.log`.
+- **Windows:** `Start ZIMaker (with console).cmd` runs the same app with a visible console that shows any errors.
+- **Linux:** errors are logged to `~/.zimaker/server.log`.
 
 ## Use it
 
@@ -99,16 +102,16 @@ The app says why when you add one of these.
 - **Picture detection** looks for ink on the page that isn't under any word. It catches illustrations, maps, plates and most line drawings. Covers and endpapers usually count as pictures. A very faint or tiny diagram can be missed.
 - **Big scan sets take a while.** A 1,000-page volume downloads about 1–3.5 GB of scans, which are deleted once the ZIM is built.
 - **Broken ebooks:** if an ebook refers to files it doesn't contain (common in real-world ebooks), those references are repaired or removed, so the ZIM has no broken links.
-- **Where its files live:** libraries, job logs and temporary files are in `~/.zim-creator` (inside WSL on Windows). To clear old job logs, use **Remove from list**, or delete `~/.zim-creator/jobs`.
+- **Where its files live:** libraries, job logs and temporary files are in `~/.zimaker` (inside WSL on Windows). To clear old job logs, use **Remove from list**, or delete `~/.zimaker/jobs`.
 
 ## Files
 
 - **Windows:**
-  - `Install ZIM Creator.cmd` / `Uninstall ZIM Creator.cmd`: the installer and uninstaller (scripts in `app/install.ps1` and `app/uninstall.ps1`).
-  - `ZIM Creator.vbs`: the launcher.
+  - `Install ZIMaker.cmd` / `Uninstall ZIMaker.cmd`: the installer and uninstaller (scripts in `app/install.ps1` and `app/uninstall.ps1`).
+  - `ZIMaker.vbs`: the launcher.
   - `Create desktop shortcut.cmd`: (re)creates the desktop icon.
-  - `Start ZIM Creator (with console).cmd`: the launcher with a visible console, for troubleshooting.
-- **Linux:** `install.sh`, `uninstall.sh`, and `zim-creator.sh` (the launcher).
+  - `Start ZIMaker (with console).cmd`: the launcher with a visible console, for troubleshooting.
+- **Linux:** `install.sh`, `uninstall.sh`, and `zimaker.sh` (the launcher).
 - **Both:**
   - `app/setup.py`: first-run setup.
   - `app/server.py`: the local web app.
@@ -122,4 +125,3 @@ The app says why when you add one of these.
     - `builder.py`: ZIM writing and validation.
     - `runner.py`: runs one job.
     - `deps.py`: installs the libraries, Pandoc and zimcheck.
-

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ZIM Creator</title>
+<title>ZIMaker</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%237a1f1f'/%3E%3Cpath d='M12 18c7-3 14-3 20 2v30c-6-5-13-5-20-2z' fill='%23f5eedc'/%3E%3Cpath d='M52 18c-7-3-14-3-20 2v30c6-5 13-5 20-2z' fill='%23fff'/%3E%3C/svg%3E">
 <style>
 :root{--bg:#f6f4ef;--card:#fff;--ink:#222;--mute:#666;--line:#ddd6c8;--acc:#7a1f1f;--acc2:#a33;--ok:#2e7d32;--bad:#b3261e}
@@ -47,12 +47,12 @@ body.dragging #drop{display:flex}
 </head>
 <body>
 <div id="drop">Drop EPUB / PDF files or archive.org links</div>
-<div id="stopped"><h1>ZIM Creator has stopped</h1><p class="sub">You can close this window. Start it again from the desktop icon.</p></div>
+<div id="stopped"><h1>ZIMaker has stopped</h1><p class="sub">You can close this window. Start it again from the desktop icon.</p></div>
 <main>
   <header>
-    <div><h1>ZIM Creator</h1>
+    <div><h1>ZIMaker</h1>
     <p class="sub">Turn websites, archive.org books, ebooks, documents and pictures into ZIM files for Kiwix.</p></div>
-    <button id="quit" title="Stop ZIM Creator">Quit</button>
+    <button id="quit" title="Stop ZIMaker">Quit</button>
   </header>
   <div class="card" id="setup"></div>
 
@@ -91,10 +91,13 @@ body.dragging #drop{display:flex}
       <small>No images at all. Smallest files.</small></label>
     <div style="margin-top:10px"><b>Websites</b></div>
     <div class="row" style="margin-top:4px">Save up to <input type="text" id="maxpages" value="300" style="width:90px"> pages</div>
+    <label class="opt"><input type="radio" name="scope" value="page"> Just this page
+      <small>e.g. a news article or blog post, with its pictures</small></label>
     <label class="opt"><input type="radio" name="scope" value="site" checked> The whole site</label>
     <label class="opt"><input type="radio" name="scope" value="section"> Only the section I linked to
       <small>e.g. for https://example.com/docs/ only pages under /docs/</small></label>
-    <div class="hint">Links to pages that aren't saved keep pointing at the live site. Sites that build their pages with JavaScript may not come out well. Audio and video aren't saved.</div>
+    <div class="hint">Links to pages that aren't saved keep pointing at the live site. Sites that build their pages with JavaScript may not come out well. Audio and video aren't saved.
+      Some sites (many big news sites, for example) block automated downloads; for those, use your browser's Print → Save as PDF and add the PDF instead.</div>
     <div style="margin-top:10px"><b>Output</b></div>
     <label class="opt"><input type="radio" name="combine" value="0" checked> One ZIM per book / volume</label>
     <label class="opt"><input type="radio" name="combine" value="1"> Combine everything into one ZIM
@@ -135,7 +138,7 @@ $("#check").onclick = async () => {
       ? `<li><span>${esc(it.input)}</span><span class="err">${esc(it.error)}</span></li>`
       : it.kind === "web"
       ? `<li><span><b>${esc(it.title)}</b><br><span class="hint">${esc(it.input)}</span></span>
-         <span class="hint">website · up to ${esc($("#maxpages").value)} pages</span></li>`
+         <span class="hint">website · ${document.querySelector("input[name=scope]:checked").value === "page" ? "this page only" : `up to ${esc($("#maxpages").value)} pages`}</span></li>`
       : `<li><span><b>${esc(it.title)}</b>${it.books.length > 1 ? `<br><span class="hint">${it.books.length} books: ${it.books.map(b => esc(b.title)).join("; ")}</span>` : ""}</span>
          <span class="hint">archive.org · ${it.books.reduce((a, b) => a + b.scans_gb, 0).toFixed(1)} GB of scans</span></li>`).join("");
     $("#checkmsg").textContent = "";
@@ -178,7 +181,7 @@ let stopped = false;
 $("#quit").onclick = async () => {
   let r = await api("/api/quit", {method: "POST", body: "{}"}).catch(() => ({}));
   if (r.busy) {
-    if (!confirm("A conversion is still running. Quit anyway and cancel it?\n\n(If you just close the window instead, ZIM Creator keeps running until the job is finished.)")) return;
+    if (!confirm("A conversion is still running. Quit anyway and cancel it?\n\n(If you just close the window instead, ZIMaker keeps running until the job is finished.)")) return;
     await api("/api/quit", {method: "POST", body: JSON.stringify({force: true})}).catch(() => {});
   }
   stopped = true;
@@ -252,7 +255,7 @@ async function poll() {
     document.querySelectorAll(".del").forEach(b => b.onclick = () => api(`/api/jobs/${b.dataset.id}/delete`, {method: "POST"}).then(poll));
   } catch (e) {
     $("#setup").style.display = "block";
-    $("#setup").innerHTML = '<span class="err">ZIM Creator isn\'t running any more. Close this window and start it again from the desktop icon.</span>';
+    $("#setup").innerHTML = '<span class="err">ZIMaker isn\'t running any more. Close this window and start it again from the desktop icon.</span>';
   }
 }
 poll(); setInterval(poll, 2000);
