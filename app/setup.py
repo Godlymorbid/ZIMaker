@@ -1,4 +1,4 @@
-"""Install ZIM Creator's libraries into ~/.zim-creator (run by the Windows installer inside WSL)."""
+"""Install ZIMaker's libraries into ~/.zimaker (run by the Windows installer inside WSL)."""
 import os
 import sys
 

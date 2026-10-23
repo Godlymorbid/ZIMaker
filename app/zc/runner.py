@@ -105,11 +105,17 @@ def main(job_dir):
 
         if not volumes:
             raise RuntimeError("Nothing could be converted.")
-        counts = Counter(v["title"] for _, v in volumes)  # tell same-titled books apart
-        for _, v in volumes:
-            if counts[v["title"]] > 1:
-                ext = os.path.splitext(v.get("source", ""))[1].lstrip(".").upper()
-                v["title"] = f"{v['title']} ({ext or v.get('source', '')})"
+        # tell same-titled books apart: by file type, or by file name when the type is the same too
+        counts = Counter(v["title"] for _, v in volumes)
+        dup = [v for _, v in volumes if counts[v["title"]] > 1]
+        by_type = Counter((v["title"], os.path.splitext(v.get("source", ""))[1].lower()) for v in dup)
+        for v in dup:
+            src = v.get("source", "")
+            ext = os.path.splitext(src)[1]
+            if ext and by_type[(v["title"], ext.lower())] == 1:
+                v["title"] = f"{v['title']} ({ext.lstrip('.').upper()})"
+            elif src:
+                v["title"] = f"{v['title']} ({src})"
 
         # 3. build
         suffix = " (text only)" if mode == "none" else ""

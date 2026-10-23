@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import common as C
 
-UA = "ZIMCreator/1.0 (offline archiving tool; respects robots.txt)"
+UA = "ZIMaker/1.0 (offline archiving tool; respects robots.txt)"
 HTML_TYPES = ("text/html", "application/xhtml+xml")
 MAX_FILE = 50_000_000          # skip single files bigger than this
 MAX_TOTAL = 4_000_000_000      # stop fetching assets past this many bytes
@@ -36,6 +36,32 @@ ATTR_RE = re.compile(r"""(\s)(href|src|poster|data-src|data-original|background|
 CSS_URL_RE = re.compile(r"""url\(\s*(['"]?)([^'")]+?)\1\s*\)|@import\s+(['"])([^'"]+)\3""", re.I)
 STYLE_BLOCK_RE = re.compile(r"(<style\b[^>]*>)(.*?)(</style>)", re.I | re.S)
 STYLE_ATTR_RE = re.compile(r"""(\sstyle\s*=\s*)(["'])(.*?)\2""", re.I | re.S)
+
+
+TIP = " Tip: open the page in your browser, use Print → Save as PDF, and add that PDF instead."
+
+
+def explain(e):
+    """A plain-language reason why a page couldn't be downloaded."""
+    if isinstance(e, urllib.error.HTTPError):
+        h = e.headers or {}
+        server = (h.get("server") or "").lower()
+        walled = (any(s in server for s in ("datadome", "cloudflare", "akamai", "perimeterx", "imperva", "sucuri"))
+                  or h.get("x-datadome") or h.get("cf-mitigated") or h.get("x-px-blocked"))
+        if e.code in (403, 429, 503) and walled:
+            return "This site blocks automated downloads (it uses bot protection), so ZIMaker can't save it." + TIP
+        if e.code in (401, 402):
+            return "This page needs a login or subscription, so ZIMaker can't save it." + TIP
+        if e.code == 403:
+            return "The site refused the download (access denied)." + TIP
+        if e.code in (404, 410):
+            return "This page doesn't exist (not found). Check the address."
+        if e.code == 429:
+            return "The site is limiting requests right now. Try again later."
+        return f"The site returned an error (HTTP {e.code} {e.reason})."
+    if isinstance(e, (urllib.error.URLError, TimeoutError, OSError)):
+        return "Couldn't reach this website. It may be down, or the address may be wrong."
+    return str(e)
 
 
 def normalize(url):
@@ -67,9 +93,16 @@ def zpath_for(url):
     return p.netloc.replace(":", "_") + "/" + "/".join(segs or ["index.html"])
 
 
-def _rel(target, from_path):
-    rel = posixpath.relpath(target, posixpath.dirname(from_path) or ".")
-    return urllib.parse.quote(rel, safe="/-._~!$&'()*+,;=:@")
+SAFE = "/-._~!$()*+,;=@"   # no ' & : ? # -- those get %-encoded so every reader parses links the same way
+
+
+def _rel(target, from_path, frag=""):
+    """Relative link from one stored page to another. Always ends in the target's own name (never '.' or '..'),
+    because 'a/wiki' and 'a/wiki/' are different addresses."""
+    d = posixpath.relpath(posixpath.dirname(target) or ".", posixpath.dirname(from_path) or ".")
+    rel = posixpath.normpath(posixpath.join(d, posixpath.basename(target)))
+    return (urllib.parse.quote(rel, safe=SAFE)
+            + ("#" + urllib.parse.quote(urllib.parse.unquote(frag), safe=SAFE) if frag else ""))
 
 
 class Site:
@@ -90,6 +123,9 @@ class Site:
         self.raw = {}         # url -> (base_url, text) for html/css still to rewrite
         self.total = 0
         self.failed = 0
+        self.start_error = None
+        self.slowed = False  # the site asked us to slow down at least once
+        self.single = scope == "page"  # just the linked page (plus its pictures and styles)
         self.robots = urllib.robotparser.RobotFileParser()
         try:
             txt = self._get(f"{s.scheme}://{host}/robots.txt", small=True)[3].decode("utf-8", "replace")
@@ -113,12 +149,28 @@ class Site:
     def fetch(self, url):
         if self.delay:
             time.sleep(min(self.delay, 10))
-        try:
-            return url, self._get(url)
-        except Exception as e:  # noqa: BLE001
-            return url, e
+        elif self.slowed:
+            time.sleep(1)  # the site asked us to slow down: stay polite for the rest of the crawl
+        for attempt in range(4):
+            try:
+                return url, self._get(url)
+            except urllib.error.HTTPError as e:
+                # "slow down" / "busy": wait (as long as the site asks, within reason) and try again
+                if e.code not in (429, 503) or attempt == 3:
+                    return url, e
+                try:
+                    wait = int(e.headers.get("Retry-After") or 0)
+                except ValueError:
+                    wait = 0
+                self.slowed = True
+                time.sleep(min(max(wait, 5 * (attempt + 1)), 60))
+            except Exception as e:  # noqa: BLE001
+                return url, e
+        return url, RuntimeError("gave up")
 
     def in_scope(self, url):
+        if self.single:
+            return False
         p = urllib.parse.urlsplit(url)
         return (p.netloc in self.hosts and urllib.parse.unquote(p.path).startswith(self.prefix)
                 and self.robots.can_fetch(UA, url))
@@ -163,7 +215,7 @@ class Site:
                 return None
             info = self.saved.get(url)
             if info:
-                return _rel(info["z"], page_z) + (f"#{frag}" if frag else "")
+                return _rel(info["z"], page_z, frag)
             return url + (f"#{frag}" if frag else "")  # not saved: keep the live link
 
         def css(block):
@@ -246,8 +298,7 @@ class Site:
                 found.add(url)
                 return m.group(0)
             info = self.saved.get(url)
-            new = _rel(info["z"], css_z) if info else url
-            new += f"#{frag}" if frag else ""
+            new = _rel(info["z"], css_z, frag) if info else url + (f"#{frag}" if frag else "")
             return f'url("{new}")' if m.group(2) is not None else f'@import "{new}"'
 
         out = CSS_URL_RE.sub(sub, text)
@@ -274,6 +325,8 @@ class Site:
                 for url, res in pool.map(self.fetch, batch):
                     if isinstance(res, Exception):
                         self.failed += 1
+                        if url == self.start:
+                            self.start_error = res
                         continue
                     final, mime, charset, data = res
                     if mime in HTML_TYPES:
@@ -321,6 +374,8 @@ class Site:
                     kind = mime.split("/")[0]
                     if kind in ("video", "audio") or (self.mode == "none" and kind == "image"):
                         continue
+                    if mime in HTML_TYPES:  # a whole web page linked as a resource: keep the live link instead
+                        continue
                     if mime == "text/css" or url.lower().split("?")[0].endswith(".css"):
                         text = self._decode(data, charset)
                         if not self._save(url, b"", "text/css"):
@@ -352,7 +407,10 @@ class Site:
 def peek(url):
     """Quick look for the 'Check links' button: title and whether robots.txt allows it."""
     s = Site(lambda *_: None, url, 1, "site", "pictures", os.path.join(C.HOME, "peek"))
-    final, mime, charset, data = s._get(s.start, small=True)
+    try:
+        final, mime, charset, data = s._get(s.start, small=True)
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(explain(e)) from e
     text = Site._decode(data, charset)
     t = re.search(r"<title[^>]*>(.*?)</title>", text, re.I | re.S)
     return {"title": " ".join(html.unescape(t.group(1)).split()) if t else s.start,
@@ -360,18 +418,22 @@ def peek(url):
 
 
 def prepare(log, url, opts, mode, vdir):
-    max_pages = max(1, min(int(opts.get("max_pages") or 300), 50000))
     scope = opts.get("scope", "site")
+    max_pages = 1 if scope == "page" else max(1, min(int(opts.get("max_pages") or 300), 50000))
     site = Site(log, url, max_pages, scope, mode, vdir)
     if not site.robots.can_fetch(UA, site.start):
-        raise RuntimeError("This site's robots.txt asks automated tools not to download it, so ZIM Creator won't.")
-    log(f"[{site.start}] saving up to {max_pages} pages" + (f" under {site.prefix}" if scope == "section" else ""))
+        raise RuntimeError("This site's robots.txt asks automated tools not to download it, so ZIMaker won't.")
+    log(f"[{site.start}] " + ("saving just this page" if scope == "page" else f"saving up to {max_pages} pages"
+                              + (f" under {site.prefix}" if scope == "section" else "")))
     n = site.crawl()
     if not n:
-        raise RuntimeError("No pages could be downloaded from this address.")
+        if site.start_error is not None:
+            raise RuntimeError(explain(site.start_error))
+        raise RuntimeError("This address didn't return a web page.")
     site.rewrite()
     log(f"[{site.start}] {n} pages and {len(site.saved) - n} other files ({site.total / 1e6:.0f} MB)"
-        + (f"; {site.failed} could not be downloaded" if site.failed else ""))
+        + (f"; {site.failed} could not be downloaded" if site.failed else "")
+        + ("; the site asked ZIMaker to slow down, so it did" if site.slowed else ""))
     start = site.saved[site.start]
     unique = {i["z"]: i for i in site.saved.values()}
     files = [{"path": i["z"], "disk": os.path.join("site", i["disk"]), "mime": i["mime"], "title": i["title"]}

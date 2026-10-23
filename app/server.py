@@ -1,4 +1,4 @@
-"""ZIM Creator local web app. Start with 'Start ZIM Creator.cmd' (Windows) or: python3 -I app/server.py
+"""ZIMaker local web app. Start with 'Start ZIMaker.cmd' (Windows) or: python3 -I app/server.py
 
 Serves the UI on http://localhost:8765 and runs one conversion job at a time in a child process.
 """
@@ -39,7 +39,7 @@ def watchdog():
     while True:
         time.sleep(5)
         if time.time() - SEEN["t"] > IDLE_EXIT and not busy() and SETUP["state"] != "installing":
-            print("Window closed and nothing running: stopping ZIM Creator.", flush=True)
+            print("Window closed and nothing running: stopping ZIMaker.", flush=True)
             SERVER["srv"].shutdown()
             return
 
@@ -243,7 +243,7 @@ class H(BaseHTTPRequestHandler):
                    "title": body.get("title", ""), "output_dir": out_dir, "created": time.time(),
                    "label": C.clip(label, 120),
                    "web": {"max_pages": int(body.get("max_pages") or 300),
-                           "scope": "section" if body.get("scope") == "section" else "site"}}
+                           "scope": body.get("scope") if body.get("scope") in ("section", "page") else "site"}}
             json.dump(job, open(os.path.join(d, "job.json"), "w", encoding="utf-8"))
             C.Log(d).stage("Waiting in queue", status="queued")
             with LOCK:
@@ -273,7 +273,7 @@ class H(BaseHTTPRequestHandler):
             for jid, p in PROCS.items():
                 if p.poll() is None:
                     os.killpg(p.pid, signal.SIGTERM)
-                    C.Log(os.path.join(C.JOBS, jid)).stage("Cancelled (ZIM Creator was closed)", status="cancelled")
+                    C.Log(os.path.join(C.JOBS, jid)).stage("Cancelled (ZIMaker was closed)", status="cancelled")
             self._json({"ok": True})
             threading.Thread(target=lambda: (time.sleep(0.5), SERVER["srv"].shutdown()), daemon=True).start()
             return
@@ -292,14 +292,14 @@ def main():
     try:
         srv = ThreadingHTTPServer(("127.0.0.1", PORT), H)
     except OSError:
-        print(f"ZIM Creator already seems to be running: open http://localhost:{PORT}")
+        print(f"ZIMaker already seems to be running: open http://localhost:{PORT}")
         return
     SERVER["srv"] = srv
     DEFAULTS["output"] = C.default_output()
     threading.Thread(target=setup_thread, daemon=True).start()
     threading.Thread(target=scheduler, daemon=True).start()
     threading.Thread(target=watchdog, daemon=True).start()
-    print(f"ZIM Creator is running at http://localhost:{PORT}", flush=True)
+    print(f"ZIMaker is running at http://localhost:{PORT}", flush=True)
     srv.serve_forever()
 
 

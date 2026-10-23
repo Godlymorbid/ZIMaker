@@ -1,4 +1,4 @@
-"""Which files ZIM Creator accepts, and how each kind is converted.
+"""Which files ZIMaker accepts, and how each kind is converted.
 
 Office/markup documents go through Pandoc to EPUB, MOBI/AZW through the 'mobi' library, then the EPUB
 path; page-based files (PDF, XPS, CBZ) through PyMuPDF; images become a gallery; ZIPs are unpacked.

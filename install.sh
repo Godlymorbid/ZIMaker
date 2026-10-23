@@ -1,11 +1,11 @@
 #!/bin/sh
-# ZIM Creator installer for Linux (per user, no root needed):  sh install.sh
+# ZIMaker installer for Linux (per user, no root needed):  sh install.sh
 set -e
 SRC="$(cd "$(dirname "$0")" && pwd)"
 DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
-DEST="$DATA/zim-creator"
+DEST="$DATA/zimaker"
 
-echo "ZIM Creator installer"
+echo "ZIMaker installer"
 echo "Turns websites, archive.org books, ebooks, documents and pictures into ZIM files for Kiwix."
 echo
 
@@ -31,23 +31,23 @@ if [ "$SRC" != "$DEST" ]; then
   cp -R "$SRC/." "$DEST/"
 fi
 find "$DEST" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
-chmod +x "$DEST/zim-creator.sh" "$DEST/install.sh" "$DEST/uninstall.sh"
+chmod +x "$DEST/zimaker.sh" "$DEST/install.sh" "$DEST/uninstall.sh"
 
 echo
 echo "== Setting up the converter's libraries (first time: about 150 MB)"
 python3 -I "$DEST/app/setup.py"
 
 echo
-echo "== Adding ZIM Creator to your applications"
+echo "== Adding ZIMaker to your applications"
 mkdir -p "$HOME/.local/bin" "$DATA/applications"
-ln -sf "$DEST/zim-creator.sh" "$HOME/.local/bin/zim-creator"
-ENTRY="$DATA/applications/zim-creator.desktop"
+ln -sf "$DEST/zimaker.sh" "$HOME/.local/bin/zimaker"
+ENTRY="$DATA/applications/zimaker.desktop"
 cat > "$ENTRY" <<EOF
 [Desktop Entry]
 Type=Application
-Name=ZIM Creator
+Name=ZIMaker
 Comment=Turn websites, books and documents into ZIM files for Kiwix
-Exec="$DEST/zim-creator.sh"
+Exec="$DEST/zimaker.sh"
 Icon=$DEST/app/icon.png
 Terminal=false
 Categories=Utility;Office;
@@ -55,16 +55,22 @@ EOF
 chmod +x "$ENTRY"
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$DATA/applications" >/dev/null 2>&1 || true
 echo "  applications menu: $ENTRY"
-echo "  command:           zim-creator"
+echo "  command:           zimaker"
 
 DESKTOP="$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")"
 if [ -d "$DESKTOP" ]; then
-  cp "$ENTRY" "$DESKTOP/zim-creator.desktop"
-  chmod +x "$DESKTOP/zim-creator.desktop"
-  command -v gio >/dev/null 2>&1 && gio set "$DESKTOP/zim-creator.desktop" metadata::trusted true >/dev/null 2>&1 || true
-  echo "  desktop icon:      $DESKTOP/zim-creator.desktop"
+  cp "$ENTRY" "$DESKTOP/zimaker.desktop"
+  chmod +x "$DESKTOP/zimaker.desktop"
+  command -v gio >/dev/null 2>&1 && gio set "$DESKTOP/zimaker.desktop" metadata::trusted true >/dev/null 2>&1 || true
+  echo "  desktop icon:      $DESKTOP/zimaker.desktop"
 fi
 
+# remove the old install from before the rename ("ZIM Creator"), if there is one
+for f in "$DATA/applications/zim-creator.desktop" "$DESKTOP/zim-creator.desktop" "$HOME/.local/bin/zim-creator"; do
+  if [ -e "$f" ] || [ -L "$f" ]; then rm -f "$f" && echo "  removed old $f"; fi
+done
+if [ -f "$DATA/zim-creator/zim-creator.sh" ]; then rm -rf "$DATA/zim-creator" && echo "  removed old install $DATA/zim-creator"; fi
+
 echo
-echo "ZIM Creator is installed. Open it from your applications menu, or run: zim-creator"
+echo "ZIMaker is installed. Open it from your applications menu, or run: zimaker"
 echo "To remove it, run: sh \"$DEST/uninstall.sh\""
