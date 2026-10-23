@@ -21,7 +21,7 @@ The installer:
 
 Installing WSL needs administrator approval and a restart. After the restart, open **Ubuntu** from the Start menu once to finish its setup, then run the installer again.
 
-To update, run a newer copy's installer over the old one. It also replaces an older install called "ZIM Creator", keeping its job history. To remove ZIMaker, run `Uninstall ZIMaker.cmd` in the install folder. Uninstalling never touches the ZIM files you made.
+ZIMaker updates itself (see **Updates** below). You can also update by running a newer copy's installer over the old one; that also replaces an older install called "ZIM Creator", keeping its job history. To remove ZIMaker, run `Uninstall ZIMaker.cmd` in the install folder. Uninstalling never touches the ZIM files you made.
 
 Windows may warn about running scripts from a downloaded zip ("Windows protected your PC"). Click **More info → Run anyway**.
 
@@ -47,7 +47,15 @@ Requirements: Python 3.9 or newer, which most distributions include, on a 64-bit
 
 **Stopping:** close the window, and ZIMaker stops by itself about 2–3 minutes later. If a conversion is still running, it finishes the conversion first and then stops. The **Quit** button stops it straight away; it asks first if a conversion is running.
 
-**Troubleshooting:**
+## Updates
+
+When it opens, ZIMaker checks this GitHub repository for a newer version, at most every 6 hours. If there is one, a banner offers **Update now**: ZIMaker downloads the latest version, reinstalls it in the background, and the window refreshes by itself in about a minute. It won't update while a conversion is running. You can also click **Check for updates** at any time.
+
+The check compares each installed file with the repository, so any change pushed to GitHub counts as an update. No version numbers to bump. The repository it checks is set in `app/update.json`; if you fork ZIMaker, change it there.
+
+If an update doesn't finish, close the window and open ZIMaker again. The log is in `%TEMP%\ZIMaker-update.log` on Windows and `~/.zimaker/update.log` on Linux.
+
+## Troubleshooting
 
 - **Windows:** `Start ZIMaker (with console).cmd` runs the same app with a visible console that shows any errors.
 - **Linux:** errors are logged to `~/.zimaker/server.log`.

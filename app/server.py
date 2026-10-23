@@ -25,6 +25,7 @@ PROCS = {}
 QUEUE = []
 LOCK = threading.Lock()
 SEEN = {"t": time.time() + 90}  # last time the window polled; grace period while it first opens
+STARTED = time.time()           # lets the window notice when an updated server has taken over
 IDLE_EXIT = 150                 # seconds without a window (and no job) before the app stops itself;
                                 # a minimised window may only poll once a minute
 SERVER = {}
@@ -148,7 +149,11 @@ class H(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b)
         elif u.path == "/api/ping":
-            self._json({"ok": True})
+            self._json({"ok": True, "started": STARTED})
+        elif u.path == "/api/update":
+            from zc import update
+            force = urllib.parse.parse_qs(u.query).get("force") == ["1"]
+            self._json(update.check(force))
         elif u.path == "/api/status":
             SEEN["t"] = time.time()
             ids = sorted(os.listdir(C.JOBS), reverse=True) if os.path.isdir(C.JOBS) else []
@@ -265,6 +270,14 @@ class H(BaseHTTPRequestHandler):
             if act == "delete":
                 shutil.rmtree(d, ignore_errors=True)
             return self._json({"ok": True})
+        if u.path == "/api/update/apply":
+            from zc import update
+            if busy():
+                return self._json({"busy": True})
+            try:
+                return self._json(update.apply())
+            except Exception as e:  # noqa: BLE001
+                return self._json({"error": f"The update couldn't be downloaded: {e}"}, 500)
         if u.path == "/api/quit":
             if busy() and not self._body().get("force"):
                 return self._json({"busy": True})
