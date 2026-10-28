@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ZIM viewer</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%237a1f1f'/%3E%3Cpath d='M12 18c7-3 14-3 20 2v30c-6-5-13-5-20-2z' fill='%23f5eedc'/%3E%3Cpath d='M52 18c-7-3-14-3-20 2v30c6-5 13-5 20-2z' fill='%23fff'/%3E%3C/svg%3E">
+<script>/* same theme and accent as the main window, applied before drawing */
+try {
+  const t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  const a = localStorage.getItem("accent"), on = localStorage.getItem("onAccent");
+  if (a) { document.documentElement.style.setProperty("--acc", a); document.documentElement.style.setProperty("--on-acc", on || "#fff"); }
+} catch (e) {}
+</script>
+<style>
+:root{color-scheme:light;--bg:#f6f4ef;--card:#fff;--ink:#222;--mute:#666;--line:#ddd6c8;--acc:#7a1f1f;--on-acc:#fff;--bad:#b3261e}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){color-scheme:dark;--bg:#1b1a18;--card:#262421;--ink:#eee;--mute:#aaa;--line:#3b3833;--acc:#e08a7a;--on-acc:#1b1a18;--bad:#ff8a80}}
+:root[data-theme=dark]{color-scheme:dark;--bg:#1b1a18;--card:#262421;--ink:#eee;--mute:#aaa;--line:#3b3833;--acc:#e08a7a;--on-acc:#1b1a18;--bad:#ff8a80}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{display:flex;flex-direction:column;background:var(--bg);color:var(--ink);font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
+.bar{display:flex;gap:6px;align-items:center;padding:8px 10px;background:var(--card);border-bottom:1px solid var(--line);flex-wrap:wrap}
+.bar button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:6px;padding:5px 10px;cursor:pointer;min-width:34px}
+.bar button.primary{background:var(--acc);border-color:var(--acc);color:var(--on-acc);font-weight:600}
+#title{font-weight:600;margin:0 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:32ch}
+.search{position:relative;flex:1;min-width:200px;display:flex;gap:6px}
+.search input{flex:1;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 10px}
+#sugg{position:absolute;top:100%;left:0;right:0;margin-top:4px;background:var(--card);border:1px solid var(--line);border-radius:8px;
+  box-shadow:0 6px 20px #0003;z-index:5;display:none;max-height:60vh;overflow:auto}
+#sugg a,#results a{display:block;padding:7px 12px;color:var(--ink);text-decoration:none;overflow-wrap:anywhere}
+#sugg a:hover,#sugg a.sel,#results a:hover{background:var(--bg)}
+main{flex:1;position:relative;min-height:0}
+iframe{border:0;width:100%;height:100%;background:#fff;display:block}
+#results{position:absolute;inset:0;background:var(--bg);overflow:auto;display:none;padding:14px 18px}
+#results h2{font-size:16px;margin:0 0 8px}
+#results .path{color:var(--mute);font-size:12px;display:block}
+.hint{color:var(--mute)} .err{color:var(--bad)}
+#msg{padding:40px 20px;text-align:center;display:none}
+</style>
+</head>
+<body>
+<div class="bar">
+  <button id="back" title="Back" aria-label="Back">←</button>
+  <button id="fwd" title="Forward" aria-label="Forward">→</button>
+  <button id="home" title="Home page" aria-label="Home page">⌂</button>
+  <span id="title">ZIM viewer</span>
+  <div class="search">
+    <input id="q" type="search" placeholder="Search this ZIM…" autocomplete="off" aria-label="Search this ZIM">
+    <button class="primary" id="go">Search</button>
+    <div id="sugg" role="listbox"></div>
+  </div>
+</div>
+<main>
+  <iframe id="frame" title="ZIM content" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"></iframe>
+  <div id="results" aria-live="polite"></div>
+  <div id="msg"></div>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const params = new URLSearchParams(location.search);
+const zid = params.get("z"), frame = $("#frame");
+const zurl = p => `/zim/${zid}/` + (p ? p.split("/").map(encodeURIComponent).join("/") : "");
+if (params.get("t")) { $("#title").textContent = params.get("t"); document.title = params.get("t") + " — ZIM viewer"; }
+
+function show(path) { $("#results").style.display = "none"; $("#sugg").style.display = "none"; frame.src = zurl(path); }
+if (!zid) { $("#msg").style.display = "block"; $("#msg").innerHTML = "<p>Open a ZIM file from ZIMaker's main window.</p>"; frame.style.display = "none"; }
+else show("");
+
+$("#home").onclick = () => show("");
+$("#back").onclick = () => { if ($("#results").style.display === "block") { $("#results").style.display = "none"; return; } try { frame.contentWindow.history.back(); } catch (e) {} };
+$("#fwd").onclick = () => { try { frame.contentWindow.history.forward(); } catch (e) {} };
+frame.onload = () => {
+  try {
+    const t = frame.contentDocument.title;
+    if (t) document.title = t + " — " + ($("#title").textContent || "ZIM viewer");
+    if (frame.contentDocument.body && /isn't open any more/.test(frame.contentDocument.body.innerText))
+      frame.contentDocument.body.innerHTML = '<p style="font-family:sans-serif;padding:30px">This ZIM was closed (ZIMaker restarted). Open it again from ZIMaker\'s main window.</p>';
+  } catch (e) {}
+};
+
+// title suggestions while typing; Enter / Search = full-text results
+let timer = null, sel = -1, items = [];
+async function api(u) { const r = await fetch(u); return r.json(); }
+$("#q").addEventListener("input", () => {
+  clearTimeout(timer);
+  const q = $("#q").value.trim();
+  if (!q) { $("#sugg").style.display = "none"; return; }
+  timer = setTimeout(async () => {
+    const r = await api(`/api/zim/${zid}/search?kind=suggest&q=${encodeURIComponent(q)}`).catch(() => ({items: []}));
+    items = r.items || []; sel = -1;
+    $("#sugg").innerHTML = items.map((it, i) => `<a href="#" data-i="${i}" role="option">${esc(it.title)}</a>`).join("")
+      + `<a href="#" data-full="1" class="hint">Search all text for “${esc(q)}”</a>`;
+    $("#sugg").style.display = "block";
+    $("#sugg").querySelectorAll("a").forEach(a => a.onclick = e => { e.preventDefault(); a.dataset.full ? fullSearch() : show(items[+a.dataset.i].path); });
+  }, 180);
+});
+$("#q").addEventListener("keydown", e => {
+  const links = [...$("#sugg").querySelectorAll("a")];
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault(); if (!links.length) return;
+    sel = (sel + (e.key === "ArrowDown" ? 1 : -1) + links.length) % links.length;
+    links.forEach((a, i) => a.classList.toggle("sel", i === sel));
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    if (sel >= 0 && links[sel]) links[sel].click(); else fullSearch();
+  } else if (e.key === "Escape") { $("#sugg").style.display = "none"; }
+});
+document.addEventListener("click", e => { if (!e.target.closest(".search")) $("#sugg").style.display = "none"; });
+$("#go").onclick = fullSearch;
+async function fullSearch() {
+  const q = $("#q").value.trim(); if (!q) return;
+  $("#sugg").style.display = "none";
+  const box = $("#results");
+  box.style.display = "block"; box.innerHTML = `<p class="hint">Searching for “${esc(q)}”…</p>`;
+  const r = await api(`/api/zim/${zid}/search?kind=full&q=${encodeURIComponent(q)}`).catch(e => ({error: e.message, items: []}));
+  if (r.error) { box.innerHTML = `<p class="err">${esc(r.error)}</p>`; return; }
+  box.innerHTML = `<h2>${r.total ?? r.items.length} result${(r.total ?? r.items.length) === 1 ? "" : "s"} for “${esc(q)}”</h2>`
+    + (r.items.length ? r.items.map((it, i) => `<a href="#" data-i="${i}">${esc(it.title)}<span class="path">${esc(it.path)}</span></a>`).join("")
+                      : '<p class="hint">Nothing found.</p>');
+  box.querySelectorAll("a").forEach(a => a.onclick = e => { e.preventDefault(); show(r.items[+a.dataset.i].path); });
+}
+</script>
+</body>
+</html>

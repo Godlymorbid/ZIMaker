@@ -86,6 +86,27 @@ def _install_zimtools(log):
     os.remove(dest + ".ok")
 
 
+def enable_heif(log=print):
+    """Let Pillow open iPhone photos (HEIC/HEIF) and AVIF: installs pillow-heif from PyPI the first time."""
+    ok, _ = _importable("pillow_heif")
+    if not ok:
+        try:
+            _install("pillow-heif", log)
+        except Exception as e:  # noqa: BLE001
+            log(f"couldn't add HEIC/AVIF support ({e})")
+            return False
+        ok, _ = _importable("pillow_heif")
+    if ok:
+        import pillow_heif
+        pillow_heif.register_heif_opener()
+        if hasattr(pillow_heif, "register_avif_opener"):
+            try:
+                pillow_heif.register_avif_opener()
+            except Exception:  # noqa: BLE001  newer Pillow reads AVIF itself
+                pass
+    return ok
+
+
 def pandoc_path():
     hits = sorted(glob.glob(os.path.join(PANDOC, "*", "bin", "pandoc")))
     return hits[-1] if hits else None

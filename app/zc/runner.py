@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from zc import common as C  # noqa: E402
 
 C.use_lib()
-from zc import builder, deps, formats, ia, settings, web  # noqa: E402
+from zc import builder, deps, formats, ia, media, settings, web  # noqa: E402
 
 
 def unique(path):
@@ -45,7 +45,8 @@ def main(job_dir):
 
         # 1. expand sources into volumes (an archive.org item can contain several books;
         #    loose pictures from the whole job become one gallery)
-        plan, pictures = [], []
+        plan, pictures, av, subtitles = [], [], [], []
+        quality = job.get("quality", "balanced")
         for s in job["sources"]:
             if s["type"] == "ia":
                 log(f"Looking up archive.org item {s['id']}")
@@ -68,6 +69,10 @@ def main(job_dir):
                 kd = formats.kind(name)
                 if kd == "image":
                     pictures.append((s["path"], name))
+                elif kd == "media":
+                    av.append((s["path"], name))
+                elif kd == "subtitle":
+                    subtitles.append((s["path"], name))
                 elif kd == "unsupported":
                     result["errors"].append(f"{name}: {formats.why_unsupported(name)}")
                     log(result["errors"][-1])
@@ -79,6 +84,14 @@ def main(job_dir):
                 log(result["errors"][-1])
             else:
                 plan.append(("gallery", pictures, None))
+        if av:
+            if mode == "none":
+                result["errors"].append(f"{len(av)} audio/video file(s) skipped: text-only mode keeps no media")
+                log(result["errors"][-1])
+            else:
+                plan.append(("media", av, subtitles))
+        elif subtitles:
+            log(f"{len(subtitles)} subtitle file(s) ignored: add them together with their videos")
         if not plan:
             raise RuntimeError("Nothing to convert.")
 
@@ -88,7 +101,8 @@ def main(job_dir):
             vdir = os.path.join(work, f"v{k}")
             os.makedirs(vdir, exist_ok=True)
             label = (b["title"] if kind == "ia" else a["url"] if kind == "web"
-                     else f"{len(a)} pictures" if kind == "gallery" else a.get("name") or os.path.basename(a["path"]))
+                     else f"{len(a)} pictures" if kind == "gallery" else f"{len(a)} audio/video files" if kind == "media"
+                     else a.get("name") or os.path.basename(a["path"]))
             log.stage(f"Preparing {k}/{len(plan)}: {label}")
             try:
                 if kind == "ia":
@@ -98,8 +112,11 @@ def main(job_dir):
                 elif kind == "gallery":
                     t = os.path.splitext(os.path.basename(a[0][1]))[0] if len(a) == 1 else f"Pictures ({len(a)})"
                     volumes.append((vdir, formats.prepare_gallery(log, a, t, vdir)))
-                elif kind == "zip":
-                    volumes.extend(formats.prepare_zip(log, a["path"], a.get("name") or a["path"], mode, vdir))
+                elif kind == "media":
+                    t = os.path.splitext(os.path.basename(a[0][1]))[0] if len(a) == 1 else f"Audio and video ({len(a)})"
+                    volumes.append((vdir, media.prepare(log, a, t, vdir, quality, b)))
+                elif kind == "archive":
+                    volumes.extend(formats.prepare_archive(log, a["path"], a.get("name") or a["path"], mode, vdir, quality))
                 else:
                     volumes.append((vdir, formats.prepare_document(log, a["path"], a.get("name") or a["path"], mode, vdir)))
             except Exception as e:  # noqa: BLE001  keep going with the other books

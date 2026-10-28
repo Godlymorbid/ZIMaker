@@ -105,9 +105,15 @@ def _rel(target, from_path, frag=""):
             + ("#" + urllib.parse.quote(urllib.parse.unquote(frag), safe=SAFE) if frag else ""))
 
 
+PLAYABLE = ("video/mp4", "video/webm", "video/ogg", "audio/mpeg", "audio/mp3", "audio/ogg", "audio/webm",
+            "audio/mp4", "audio/aac", "audio/wav", "audio/x-wav", "audio/flac", "audio/opus")
+MAX_AV = 500_000_000  # per audio/video file, when the profile keeps website audio and video
+
+
 class Site:
-    def __init__(self, log, start, max_pages, scope, mode, vdir):
+    def __init__(self, log, start, max_pages, scope, mode, vdir, include_av=False, offline=False):
         self.log, self.mode, self.vdir = log, mode, vdir
+        self.include_av = include_av and mode != "none"
         self.start = normalize(start)
         if not self.start:
             raise RuntimeError("Not a web address (it must start with http:// or https://)")
@@ -128,6 +134,8 @@ class Site:
         self.single = scope == "page"  # just the linked page (plus its pictures and styles)
         self.robots = urllib.robotparser.RobotFileParser()
         try:
+            if offline:  # building from a saved page: no network at all
+                raise RuntimeError
             txt = self._get(f"{s.scheme}://{host}/robots.txt", small=True)[3].decode("utf-8", "replace")
             self.robots.parse(txt.splitlines())
         except Exception:  # noqa: BLE001  no robots.txt: everything allowed
@@ -138,11 +146,13 @@ class Site:
     def _get(self, url, small=False):
         req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
         with urllib.request.urlopen(req, timeout=20 if small else 45) as r:
+            ctype = r.headers.get_content_type()
+            limit = MAX_AV if self.include_av and ctype.split("/")[0] in ("video", "audio") else MAX_FILE
             n = int(r.headers.get("Content-Length") or 0)
-            if n > MAX_FILE:
+            if n > limit:
                 raise RuntimeError("too large")
-            data = r.read(MAX_FILE + 1)
-            if len(data) > MAX_FILE:
+            data = r.read(limit + 1)
+            if len(data) > limit:
                 raise RuntimeError("too large")
             return r.geturl(), r.headers.get_content_type(), r.headers.get_content_charset(), data
 
@@ -343,6 +353,8 @@ class Site:
                         for u in found["page"]:
                             if u not in queued and self.in_scope(u):
                                 if AV_EXT.search(urllib.parse.urlsplit(u).path):
+                                    if self.include_av:
+                                        assets.add(u)  # a link to an audio/video file on the site
                                     continue
                                 if NOT_PAGE_EXT.search(urllib.parse.urlsplit(u).path):
                                     assets.add(u)
@@ -350,7 +362,7 @@ class Site:
                                     queued.add(u)
                                     pages.append(u)
                         assets |= found["asset"]
-                    elif mime.split("/")[0] not in ("video", "audio"):
+                    elif mime.split("/")[0] not in ("video", "audio") or (self.include_av and mime in PLAYABLE):
                         self._save(url, data, mime)
                 log.stage(f"Saving website: {n_pages} pages", n_pages, self.max_pages)
             if n_pages >= self.max_pages and pages:
@@ -362,7 +374,8 @@ class Site:
             n = 0
             while todo and n < MAX_ASSETS and self.total < MAX_TOTAL:
                 batch = [todo.popleft() for _ in range(min(16, len(todo)))]
-                batch = [u for u in batch if not AV_EXT.search(urllib.parse.urlsplit(u).path)]
+                if not self.include_av:
+                    batch = [u for u in batch if not AV_EXT.search(urllib.parse.urlsplit(u).path)]
                 if self.mode == "none":
                     batch = [u for u in batch if not MEDIA_EXT.search(urllib.parse.urlsplit(u).path)]
                 for url, res in pool.map(self.fetch, batch):
@@ -372,7 +385,9 @@ class Site:
                         continue
                     final, mime, charset, data = res
                     kind = mime.split("/")[0]
-                    if kind in ("video", "audio") or (self.mode == "none" and kind == "image"):
+                    if kind in ("video", "audio") and not (self.include_av and mime in PLAYABLE):
+                        continue  # audio/video only when the profile keeps it, and only formats readers can play
+                    if self.mode == "none" and kind == "image":
                         continue
                     if mime in HTML_TYPES:  # a whole web page linked as a resource: keep the live link instead
                         continue
@@ -420,7 +435,9 @@ def peek(url):
 def prepare(log, url, opts, mode, vdir):
     scope = opts.get("scope", "site")
     max_pages = 1 if scope == "page" else max(1, min(int(opts.get("max_pages") or 300), 50000))
-    site = Site(log, url, max_pages, scope, mode, vdir)
+    site = Site(log, url, max_pages, scope, mode, vdir, include_av=bool(opts.get("media")))
+    if site.include_av:
+        log("keeping the site's audio and video (formats readers can play, up to 500 MB each)")
     if not site.robots.can_fetch(UA, site.start):
         raise RuntimeError("This site's robots.txt asks automated tools not to download it, so ZIMaker won't.")
     log(f"[{site.start}] " + ("saving just this page" if scope == "page" else f"saving up to {max_pages} pages"
@@ -443,6 +460,54 @@ def prepare(log, url, opts, mode, vdir):
     return {"kind": "site", "title": title, "creator": host, "publisher": host,
             "date": time.strftime("%Y-%m-%d"), "language": "eng", "source": site.start,
             "main": start["z"], "files": files}
+
+
+def from_mhtml(log, path, name, mode, vdir):
+    """A page saved by a browser as a single file ('Save as… → Webpage, single file', .mhtml / .mht).
+
+    Useful for pages ZIMaker can't download itself (sites that block tools, pages behind a login you
+    have access to). Its pictures and styles are inside the file; links to other pages stay live.
+    """
+    import email
+    from email import policy
+    with open(path, "rb") as f:
+        msg = email.message_from_binary_file(f, policy=policy.default)
+    parts = [p for p in msg.walk() if not p.is_multipart()]
+    if not parts:
+        raise RuntimeError("This saved page is empty.")
+    main = next((p for p in parts if p.get_content_type() in HTML_TYPES), None)
+    if main is None:
+        raise RuntimeError("This file doesn't contain a web page.")
+    start = normalize(main.get("Content-Location") or "") or "https://saved-page.local/index.html"
+    site = Site(log, start, 1, "page", mode, vdir, offline=True)
+    for p in parts:
+        loc = normalize(p.get("Content-Location") or "")
+        if p is main:
+            loc = start
+        if not loc:
+            continue
+        data = p.get_payload(decode=True) or b""
+        ctype = p.get_content_type()
+        if ctype in HTML_TYPES:
+            text = Site._decode(data, p.get_content_charset())
+            t = re.search(r"<title[^>]*>(.*?)</title>", text, re.I | re.S)
+            if site._save(loc, b"", "text/html", " ".join(html.unescape(t.group(1)).split()) if t else "", "page"):
+                site.raw[loc] = (loc, text)
+        elif ctype == "text/css":
+            if site._save(loc, b"", "text/css"):
+                site.raw[loc] = (loc, Site._decode(data, p.get_content_charset()))
+        elif not (mode == "none" and ctype.split("/")[0] in ("image", "video", "audio")):
+            site._save(loc, data, ctype)
+    site.rewrite()
+    info = site.saved[start]
+    unique = {i["z"]: i for i in site.saved.values()}
+    log(f"[{name}] saved page with {len(unique) - 1} pictures, styles and other files")
+    title = info["title"] or os.path.splitext(os.path.basename(name))[0]
+    host = urllib.parse.urlsplit(start).netloc
+    return {"kind": "site", "title": title, "creator": host, "publisher": host,
+            "date": time.strftime("%Y-%m-%d"), "language": "eng", "source": os.path.basename(name),
+            "main": info["z"], "files": [{"path": i["z"], "disk": os.path.join("site", i["disk"]), "mime": i["mime"],
+                                           "title": i["title"]} for i in unique.values()]}
 
 
 mimetypes.add_type("image/webp", ".webp")

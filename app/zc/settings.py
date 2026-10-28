@@ -5,6 +5,7 @@ window is validated here; unknown or bad values fall back to the defaults.
 """
 import json
 import os
+import re
 
 from . import common as C
 
@@ -27,11 +28,12 @@ CHOICES = {
 
 def default_profile():
     return {"mode": "pictures", "combine": False, "output_dir": C.default_output(), "max_pages": 300,
-            "scope": "site", "quality": "balanced", "sensitivity": "balanced"}
+            "scope": "site", "web_media": False, "quality": "balanced", "sensitivity": "balanced"}
 
 
 def defaults():
-    return {"theme": "system", "check_updates": True, "active": "Default", "profiles": {"Default": default_profile()}}
+    return {"theme": "system", "accent": "", "check_updates": True, "active": "Default",
+            "profiles": {"Default": default_profile()}}
 
 
 def clean_profile(p):
@@ -42,7 +44,7 @@ def clean_profile(p):
         x = p.get(k, v)
         if k in CHOICES:
             x = x if x in CHOICES[k] else v
-        elif k == "combine":
+        elif k in ("combine", "web_media"):
             x = bool(x)
         elif k == "max_pages":
             try:
@@ -58,7 +60,9 @@ def clean_profile(p):
 def clean(s):
     d = defaults()
     s = s if isinstance(s, dict) else {}
+    accent = str(s.get("accent") or "")
     out = {"theme": s.get("theme") if s.get("theme") in ("system", "light", "dark") else d["theme"],
+           "accent": accent.lower() if re.fullmatch(r"#[0-9a-fA-F]{6}", accent) else "",  # "" = ZIMaker red
            "check_updates": bool(s.get("check_updates", True))}
     profiles = {}
     for name, p in (s.get("profiles") or {}).items():

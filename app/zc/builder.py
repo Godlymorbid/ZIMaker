@@ -1,6 +1,7 @@
 """Write prepared volumes into a ZIM file and validate it."""
 import datetime
 import html
+import mimetypes
 import os
 import posixpath
 import re
@@ -26,6 +27,12 @@ ul.toc{padding-left:1.2em}
 ul.toc li.d1{margin-left:1.5em}
 ul.toc li.d2{margin-left:3em}
 img.scan{display:block;width:100%;height:auto;margin:.5em 0;box-shadow:0 1px 4px #0003;background:#fff}
+video.media{display:block;width:100%;max-height:80vh;background:#000;margin:.5em 0}
+audio.media{display:block;width:100%;margin:.8em 0}
+img.cover{display:block;max-width:min(100%,360px);height:auto;margin:.5em 0;box-shadow:0 1px 4px #0003}
+.mail-head{font-family:sans-serif;font-size:.9em;padding:.6em .8em;background:#0000000a;border-radius:6px;margin-bottom:1em}
+.mail-html{overflow-x:auto}
+figure{margin:1em 0}
 details.ocrtext{margin-top:1em}
 details.ocrtext summary{cursor:pointer;font-family:sans-serif;font-size:.9em;color:#555}
 """
@@ -109,6 +116,9 @@ def build(log, volumes, out_path, title=None):
                      or (v.get("kind") == "epub" and not v.get("drop_images"))
                      or (v.get("kind") == "site" and any(f["mime"].startswith("image/") for f in v["files"]))
                      for _, v in volumes)
+    any_video = any((v.get("kind") == "pages" and any((p.get("media") or {}).get("kind") == "video" for p in v["pages"]))
+                    or (v.get("kind") == "site" and any(f["mime"].startswith("video/") for f in v["files"]))
+                    for _, v in volumes)
     if os.path.exists(out_path):
         os.remove(out_path)
 
@@ -125,7 +135,7 @@ def build(log, volumes, out_path, title=None):
             "Description": C.clip(title if len(title) <= 80 else title, 80),
             "LongDescription": C.clip(f"{title}. Converted with ZIMaker from: "
                                       + "; ".join(v.get("source", "") for _, v in volumes), 4000),
-            "Tags": "zimaker;_videos:no" + ("" if any_images else ";_pictures:no"),
+            "Tags": "zimaker" + ("" if any_video else ";_videos:no") + ("" if any_images else ";_pictures:no"),
         }
         for k, v in meta.items():
             if v:
@@ -176,8 +186,31 @@ def _emit_pages(c, It, Image, vdir, vol, pre, multi):
                        + (f'<details class="ocrtext"><summary>Text of this page</summary>{p["body"]}</details>'
                           if p.get("body") else ""))
             cls = "scan"
+        elif p.get("media") and os.path.exists(os.path.join(vdir, p["media"]["file"])):
+            m = p["media"]
+            c.add_item(It(f"{pre}{m['file']}", "", m["mime"], file=os.path.join(vdir, m["file"]), compress=False))
+            poster = m.get("poster") if m.get("poster") and os.path.exists(os.path.join(vdir, m["poster"])) else None
+            if poster:
+                c.add_item(It(f"{pre}{poster}", "", "image/jpeg", file=os.path.join(vdir, poster), compress=False))
+            tracks = ""
+            for tr in m.get("tracks", []):
+                c.add_item(It(f"{pre}{tr['src']}", "", "text/vtt", file=os.path.join(vdir, tr["src"])))
+                tracks += (f'<track kind="subtitles" src="{tr["src"]}" label="{html.escape(tr["label"])}"'
+                           + (f' srclang="{html.escape(tr["lang"])}"' if tr.get("lang") else "") + ">")
+            if m["kind"] == "video":
+                player = (f'<video class="media" controls preload="metadata"'
+                          + (f' poster="{poster}"' if poster else "") + f'><source src="{m["file"]}" type="{m["mime"]}">'
+                          + tracks + "Your reader can't play this video.</video>")
+            else:
+                player = ((f'<img class="cover" src="{poster}" alt="Cover">' if poster else "")
+                          + f'<audio class="media" controls preload="metadata" src="{m["file"]}">Your reader can\'t play this audio.</audio>')
+            content, cls, img = player + (p.get("body") or ""), "scan", None
         else:
             content, cls, img = body, "", None
+        for rel in p.get("files", []):  # extra files a page refers to (e.g. pictures attached to an email)
+            if os.path.exists(os.path.join(vdir, rel)):
+                mime = mimetypes.guess_type(rel)[0] or "application/octet-stream"
+                c.add_item(It(f"{pre}{rel}", "", mime, file=os.path.join(vdir, rel), compress=not mime.startswith("image/")))
         inner = f'<nav class="pg">{bar}</nav><h1>{html.escape(t)}</h1>{content}<nav class="pg bottom">{bar}</nav>'
         c.add_item(It(path, t, "text/html", _doc(t, inner, css, cls), front=True))
         toc.append(f'<li><a href="p{i + 1}">{html.escape(p["label"])}</a>'
@@ -185,7 +218,8 @@ def _emit_pages(c, It, Image, vdir, vol, pre, multi):
                    + (' <span class="pic">· illustrated</span>' if img and not vol.get("gallery") else "") + "</li>")
     back = '<nav class="pg"><a href="../index">All</a></nav>' if multi else ""
     info = " · ".join(x for x in (vol.get("creator"), vol.get("date")) if x)
-    unit = "pictures" if vol.get("gallery") else "parts" if vol.get("plain") else "pages"
+    unit = ("files" if vol.get("media") else "pictures" if vol.get("gallery")
+            else "messages" if vol.get("emails") else "parts" if vol.get("plain") else "pages")
     note = f"{len(pages)} {unit}."
     if vol.get("ocr"):
         note += " Text comes from OCR and may contain errors."

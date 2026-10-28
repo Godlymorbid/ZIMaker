@@ -2,6 +2,7 @@
 
 Serves the UI on http://localhost:8765 and runs one conversion job at a time in a child process.
 """
+import hashlib
 import json
 import os
 import re
@@ -53,6 +54,106 @@ def setup_thread():
         SETUP.update(state="ready", message="", zimcheck=st["zimcheck"])
     except Exception as e:  # noqa: BLE001
         SETUP.update(state="error", message=f"Setup failed: {e}")
+
+
+# ---- ZIM viewer: opened archives, a remembered library, search
+ZIMS = {}
+LIBRARY = os.path.join(C.HOME, "library.json")
+
+
+def _library_load():
+    try:
+        return json.load(open(LIBRARY, encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+
+
+def zim_open(path):
+    path = (path or "").strip().strip('"')
+    if not path:
+        raise RuntimeError("Enter the path of a .zim file.")
+    wp = path if path.startswith("/") else C.to_wsl(path)
+    if not wp.lower().endswith(".zim") or not os.path.isfile(wp):
+        raise RuntimeError(f"No ZIM file at {path}")
+    C.use_lib()
+    from libzim.reader import Archive
+    try:
+        a = Archive(wp)
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(f"This isn't a ZIM file ZIMaker can open ({e}).") from e
+    zid = hashlib.sha1(os.path.realpath(wp).encode()).hexdigest()[:12]
+    ZIMS[zid] = {"archive": a, "path": wp}
+    try:
+        title = a.get_metadata("Title").decode("utf-8", "replace")
+    except (KeyError, RuntimeError):
+        title = os.path.splitext(os.path.basename(wp))[0]
+    shown = path if not wp.startswith(C.UPLOADS) else os.path.basename(wp)
+    lib = [x for x in _library_load() if x.get("path") != shown]
+    if not wp.startswith(C.UPLOADS):  # uploaded copies aren't kept in the library
+        lib.insert(0, {"path": shown, "title": title, "t": time.time()})
+        json.dump(lib[:100], open(LIBRARY, "w", encoding="utf-8"))
+    return {"id": zid, "title": title, "path": shown, "articles": a.article_count,
+            "size": os.path.getsize(wp), "search": bool(a.has_fulltext_index)}
+
+
+def forget(path):
+    json.dump([x for x in _library_load() if x.get("path") != path], open(LIBRARY, "w", encoding="utf-8"))
+
+
+def library():
+    """ZIMs opened before plus ZIMs ZIMaker made, newest first (only ones that still exist)."""
+    seen, out = set(), []
+    entries = [(x["path"], x.get("title", "")) for x in _library_load()]
+    if os.path.isdir(C.JOBS):
+        for jid in sorted(os.listdir(C.JOBS), reverse=True)[:200]:
+            try:
+                res = json.load(open(os.path.join(C.JOBS, jid, "result.json"), encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            entries += [(f["path"], "") for f in res.get("files", [])]
+    for path, title in entries:
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            wp = path if path.startswith("/") else C.to_wsl(path)
+            st = os.stat(wp)
+        except (OSError, subprocess.CalledProcessError):
+            continue
+        out.append({"path": path, "title": title or os.path.splitext(os.path.basename(wp))[0],
+                    "size": st.st_size, "mtime": st.st_mtime})
+    out.sort(key=lambda x: -x["mtime"])
+    return out[:60]
+
+
+def zim_search(zid, q, kind):
+    z = ZIMS.get(zid)
+    if not z:
+        return {"error": "This ZIM isn't open any more."}
+    q = q.strip()
+    if not q:
+        return {"items": []}
+    C.use_lib()
+    a = z["archive"]
+    try:
+        if kind == "suggest":
+            from libzim.suggestion import SuggestionSearcher
+            paths, total = list(SuggestionSearcher(a).suggest(q).getResults(0, 12)), None
+        else:
+            if not a.has_fulltext_index:
+                return {"error": "This ZIM has no full-text index; try the title suggestions instead.", "items": []}
+            from libzim.search import Query, Searcher
+            s = Searcher(a).search(Query().set_query(q))
+            total, paths = s.getEstimatedMatches(), list(s.getResults(0, 50))
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"Search failed ({e})", "items": []}
+    items = []
+    for p in paths:
+        try:
+            items.append({"path": p, "title": a.get_entry_by_path(p).title or p})
+        except KeyError:
+            pass
+    return {"items": items, "total": total}
 
 
 def classify(line):
@@ -153,6 +254,20 @@ class H(BaseHTTPRequestHandler):
         elif u.path == "/api/settings":
             from zc import settings
             self._json(settings.load())
+        elif u.path == "/api/tools":
+            from zc import tools
+            self._json(tools.status())
+        elif u.path == "/viewer":
+            self._file(os.path.join(APP, "viewer.html"), "text/html; charset=utf-8")
+        elif u.path == "/api/zim/library":
+            self._json({"items": library()})
+        elif u.path.startswith("/api/zim/") and u.path.endswith("/search"):
+            zid = u.path.split("/")[3]
+            q = urllib.parse.parse_qs(u.query)
+            self._json(zim_search(zid, (q.get("q") or [""])[0], (q.get("kind") or ["full"])[0]))
+        elif u.path.startswith("/zim/"):
+            parts = u.path.split("/", 3)
+            self._send_zim(parts[2] if len(parts) > 2 else "", urllib.parse.unquote(parts[3]) if len(parts) > 3 else "")
         elif u.path == "/api/update":
             from zc import update
             force = urllib.parse.parse_qs(u.query).get("force") == ["1"]
@@ -166,13 +281,77 @@ class H(BaseHTTPRequestHandler):
         else:
             self._json({"error": "not found"}, 404)
 
+    def _file(self, path, ctype):
+        b = open(path, "rb").read()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+
+    def _send_zim(self, zid, zpath):
+        """Serve one entry of an opened ZIM. Scripts inside ZIM content are switched off (CSP sandbox), so a
+        saved website can't reach ZIMaker's own controls; byte ranges let audio and video seek."""
+        z = ZIMS.get(zid)
+        if not z:
+            return self._json({"error": "This ZIM isn't open any more. Open it again from ZIMaker."}, 404)
+        a = z["archive"]
+        try:
+            if not zpath:
+                e = a.main_entry
+            else:
+                e = a.get_entry_by_path(zpath)
+            if e.is_redirect:
+                e = e.get_redirect_entry()
+                if e.path != zpath:
+                    self.send_response(302)
+                    self.send_header("Location", f"/zim/{zid}/" + urllib.parse.quote(e.path))
+                    self.end_headers()
+                    return
+            item = e.get_item()
+        except KeyError:
+            b = b"<!DOCTYPE html><meta charset=utf-8><p style='font-family:sans-serif'>This page isn't in the ZIM file.</p>"
+            self.send_response(404)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+            return
+        data = item.content
+        total = item.size
+        start, end, code = 0, total - 1, 200
+        m = re.match(r"bytes=(\d*)-(\d*)", self.headers.get("Range") or "")
+        if m and total:
+            if m.group(1):
+                start = int(m.group(1))
+                end = min(int(m.group(2)) if m.group(2) else total - 1, total - 1)
+            else:
+                start = max(0, total - int(m.group(2) or 0))
+            if start > end:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{total}")
+                self.end_headers()
+                return
+            code = 206
+        self.send_response(code)
+        self.send_header("Content-Type", item.mimetype or "application/octet-stream")
+        self.send_header("Content-Length", str(end - start + 1 if total else 0))
+        self.send_header("Accept-Ranges", "bytes")
+        if code == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
+        self.send_header("Content-Security-Policy", "sandbox allow-same-origin allow-popups allow-popups-to-escape-sandbox")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        if total:
+            self.wfile.write(bytes(data[start:end + 1]))
+
     def do_PUT(self):
         u = urllib.parse.urlparse(self.path)
         if u.path != "/api/upload":
             return self._json({"error": "not found"}, 404)
         from zc import formats
         name = os.path.basename(urllib.parse.parse_qs(u.query).get("name", ["upload"])[0])
-        if formats.kind(name) == "unsupported":
+        if formats.kind(name) == "unsupported" and not name.lower().endswith(".zim"):
             return self._json({"error": formats.why_unsupported(name)}, 400)
         d = os.path.join(C.UPLOADS, uuid.uuid4().hex[:12])
         os.makedirs(d, exist_ok=True)
@@ -256,7 +435,8 @@ class H(BaseHTTPRequestHandler):
                    "label": C.clip(label, 120), "profile": pname,
                    "quality": prof["quality"], "sensitivity": prof["sensitivity"],
                    "web": {"max_pages": int(body.get("max_pages") or 300),
-                           "scope": body.get("scope") if body.get("scope") in ("section", "page") else "site"}}
+                           "scope": body.get("scope") if body.get("scope") in ("section", "page") else "site",
+                           "media": bool(prof.get("web_media"))}}
             json.dump(job, open(os.path.join(d, "job.json"), "w", encoding="utf-8"))
             C.Log(d).stage("Waiting in queue", status="queued")
             with LOCK:
@@ -281,6 +461,14 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/settings":
             from zc import settings
             return self._json(settings.save(self._body()))
+        if u.path == "/api/zim/open":
+            try:
+                return self._json(zim_open(self._body().get("path", "")))
+            except Exception as e:  # noqa: BLE001
+                return self._json({"error": str(e)}, 400)
+        if u.path == "/api/zim/forget":
+            forget(self._body().get("path", ""))
+            return self._json({"ok": True})
         if u.path == "/api/update/apply":
             from zc import update
             if busy():

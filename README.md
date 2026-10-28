@@ -1,6 +1,6 @@
 # ZIMaker
 
-Turns websites, archive.org books, ebooks, documents and pictures into ZIM files for Kiwix. It runs on **Windows** and **Linux**.
+Turns websites, archive.org books, ebooks, documents, emails, pictures, audio and video into ZIM files for Kiwix, and opens ZIM files so you can read and search them. It runs on **Windows** and **Linux**.
 
 ## Install it (or share it)
 
@@ -51,14 +51,16 @@ Requirements: Python 3.9 or newer, which most distributions include, on a 64-bit
 
 Click **⚙ Settings** in the top corner.
 
-- **Appearance:** System, Light or Dark. System follows your computer's setting.
+- **Appearance:** System, Light or Dark. System follows your computer's setting. **Accent color:** pick a swatch or any color with the color picker; button text switches between white and black so it stays readable.
+- **Optional tools:** shows whether FFmpeg, 7-Zip and LibreOffice are installed, and the one command that installs the missing ones (see **Optional tools** below).
 - **Updates:** turn the automatic update check on or off, or click **Check for updates now**.
 - **Profiles:** named sets of defaults. Examples: "Websites" (just the linked page, text only) and "Scanned books" (only pages with pictures, sharper images). Create, duplicate, rename and delete them. Each profile sets:
   - page images
   - one file or combined
   - save folder
   - website page limit and scope
-  - **image quality:** smaller files (1400 px), balanced (1800 px) or sharper (2400 px)
+  - **website audio and video:** off by default; when on, playable audio and video on the site (up to 500 MB each) are saved too
+  - **image quality:** smaller files (1400 px), balanced (1800 px) or sharper (2400 px). It also sets video quality: 480p, 720p or 1080p
   - **picture detection:** catch more pictures, balanced, or fewer false alarms
 
 On the main screen, pick a profile from **Profile** to fill in all the options at once. You can still change options for a single job, or click **Save options to profile** to keep them. Settings are stored in `~/.zimaker/settings.json`, so they survive updates and reinstalls.
@@ -91,7 +93,18 @@ If an update doesn't finish, close the window and open ZIMaker again. The log is
 4. **Output**: one ZIM per book, document or site, or **combine** everything into one ZIM with a home page and search across all of it.
 5. Optionally set a **Title**, choose the **Save to folder** (a Proton Drive folder works), and click **Build ZIM**.
 
-Jobs run one at a time. The Jobs list shows progress, a log, and an **Open folder** button when a job is done. Every file is checked with openZIM's `zimcheck` before it's saved.
+Jobs run one at a time. The Jobs list shows progress, a log, and **Preview** and **Open folder** buttons when a job is done. Every file is checked with openZIM's `zimcheck` before it's saved.
+
+## Open and preview ZIM files
+
+**Your ZIM files** lists the ZIMs you made and the ones you opened before. To open any other ZIM, drop it onto the window, or paste its path and click **Open**. Each one opens in a viewer window with:
+
+- Back, Forward and Home buttons;
+- title suggestions as you type in the search box;
+- full-text search (press Enter or click **Search**);
+- playable audio and video, with seeking.
+
+The viewer shows the ZIM's pages without running their scripts, so a ZIM from anywhere can't reach ZIMaker or your files. Pages that need JavaScript to work look better in Kiwix.
 
 ## What it accepts
 
@@ -100,25 +113,49 @@ Jobs run one at a time. The Jobs list shows progress, a log, and an **Open folde
 | Websites | any http/https address | the site's pages with their styles, scripts, fonts and images; a list of all saved pages |
 | archive.org books | item links or IDs | OCR text of every page, with printed page numbers and running heads; scans of illustrated pages |
 | Ebooks | EPUB, MOBI, AZW, AZW3, FB2 | the book's own chapters, styles and images, plus a contents page and Previous/Next links |
-| Documents | DOCX, ODT, RTF, PPTX, XLSX, CSV, TSV, Markdown, HTML, Jupyter notebooks, LaTeX, reStructuredText, Org, AsciiDoc, Typst, MediaWiki | converted with Pandoc: split into chapters at headings, with a contents page and the document's pictures |
-| Plain text | TXT | split into chapters (or parts of about 4,000 words) |
+| Documents | DOCX, ODT, RTF, PPTX, XLSX, CSV, TSV, Markdown, HTML, Jupyter notebooks, LaTeX, reStructuredText, Org, AsciiDoc, Typst, MediaWiki, Textile, txt2tags, Muse, POD, Creole, Djot | converted with Pandoc: split into chapters at headings, with a contents page and the document's pictures |
+| Older and other office files ¹ | DOC, XLS, PPT, PPS, WPD, WPS, ABW, HWP, ODS, ODP, ODG, Visio, Publisher, StarOffice and macro/template variants | converted with LibreOffice first, then as above (slides and drawings become pages) |
+| Saved web pages | MHT, MHTML | the page with its pictures and styles |
+| Email | EML, MBOX | one page per message (newest first), with its pictures; other attachments are listed. Scripts and remote images are removed |
+| Plain text | TXT, LOG, NFO | split into chapters (or parts of about 4,000 words) |
 | Page-based | PDF, XPS, CBZ comics | the text of each page; page images for illustrated pages (comics and scans without text keep every page as an image) |
-| Pictures | JPG, PNG, GIF, WEBP, TIFF, BMP, SVG | one gallery for all the pictures in a job, a picture per page |
-| ZIP files | — | a saved website folder becomes a website; a folder of pictures becomes a gallery; anything else is converted file by file |
+| Pictures | JPG, PNG, GIF, WEBP, TIFF, BMP, SVG, HEIC/HEIF, AVIF, ICO, TGA, PSD, JPEG 2000, PCX, PPM | one gallery for all the pictures in a job, a picture per page |
+| Video ¹ | MP4, MKV, MOV, AVI, WEBM, WMV, FLV, MPG, TS, 3GP, OGV, VOB and more | WebM (VP9 + Opus) with a poster image, a page per video; `.srt`/`.vtt` subtitles with the same name are added |
+| Audio ¹ | MP3, M4A, AAC, WAV, FLAC, OGG, OPUS, WMA, AIFF, M4B and more | MP3 (MP3s are kept as they are), with cover art when the file has it |
+| Archives | ZIP, TAR, TAR.GZ, TAR.XZ, TAR.BZ2; 7Z, RAR, CBR, CB7 ¹ | a saved website folder becomes a website; a CHM-style help folder becomes a site; a folder of pictures becomes a gallery; anything else is converted file by file, including archives inside archives |
+| Help files ¹ | CHM | the help pages as a website |
+
+¹ Needs an optional tool (below).
 
 **Not supported:**
 
-- Old Office files (`.doc`, `.xls`, `.ppt`): save them in the newer format first.
 - DjVu: convert to PDF first.
-- CBR/RAR and 7z: repack as ZIP or CBZ.
-- Apple iWork files: export them first.
-- Audio and video.
+- Apple iWork files (Pages, Keynote, Numbers): export them first.
+- WARC web archives.
+- ZIM files: these open in the viewer instead.
 
 The app says why when you add one of these.
 
+## Optional tools
+
+Video, audio, 7Z/RAR/CBR and CHM, and old Office files use free tools from your Linux distribution, which ZIMaker doesn't download itself:
+
+| Tool | For |
+|---|---|
+| FFmpeg | audio and video |
+| 7-Zip (and unar) | 7Z, RAR, CBR, CB7, CHM |
+| LibreOffice (no-GUI parts) | DOC, XLS, PPT and other office formats |
+
+Install them once (about 400 MB in all):
+
+- **Windows**, in PowerShell: `wsl -u root -- sh -c "apt-get update && apt-get install -y ffmpeg 7zip unar libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui libreoffice-draw-nogui"`
+- **Linux** (Debian/Ubuntu): `sudo apt install ffmpeg 7zip unar libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui libreoffice-draw-nogui`
+
+**⚙ Settings → Optional tools** shows which are installed and the exact command for your system. If you add a file that needs a missing tool, the job says which one and how to install it.
+
 ## Notes
 
-- **Websites:** the crawler follows the site's `robots.txt` and never saves audio or video. Links to pages that weren't saved (past the page limit, or outside the section) still point at the live site. Sites that build their pages with JavaScript (web apps, infinite scroll) may not come out well.
+- **Websites:** the crawler follows the site's `robots.txt`. It saves audio and video only when the profile's **website audio and video** option is on. Links to pages that weren't saved (past the page limit, or outside the section) still point at the live site. Sites that build their pages with JavaScript (web apps, infinite scroll) may not come out well.
 - **archive.org books:**
   - An item that holds several books (a multi-volume set, for example) gives one volume per book.
   - Borrow-only (lending library) items can't be downloaded; the app says so.
@@ -140,11 +177,16 @@ The app says why when you add one of these.
   - `app/setup.py`: first-run setup.
   - `app/server.py`: the local web app.
   - `app/ui.html`: the page you see.
+  - `app/viewer.html`: the ZIM viewer.
   - `app/icon.ico` and `app/icon.png`: the app icon.
   - `app/zc/`: the converter.
     - `ia.py`: archive.org.
     - `web.py`: websites.
     - `epub.py`, `pdf.py`, `formats.py`: files.
+    - `media.py`: audio and video.
+    - `emails.py`: EML and MBOX.
+    - `tools.py`: finds the optional tools.
+    - `settings.py`: settings and profiles.
     - `images.py`: picture detection.
     - `builder.py`: ZIM writing and validation.
     - `runner.py`: runs one job.

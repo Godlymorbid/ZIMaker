@@ -6,7 +6,11 @@
 <title>ZIMaker</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%237a1f1f'/%3E%3Cpath d='M12 18c7-3 14-3 20 2v30c-6-5-13-5-20-2z' fill='%23f5eedc'/%3E%3Cpath d='M52 18c-7-3-14-3-20 2v30c6-5 13-5 20-2z' fill='%23fff'/%3E%3C/svg%3E">
 <script>/* apply the saved theme before anything is drawn (no flash) */
-try { const t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+try {
+  const t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  const a = localStorage.getItem("accent"), on = localStorage.getItem("onAccent");
+  if (a) { document.documentElement.style.setProperty("--acc", a); document.documentElement.style.setProperty("--on-acc", on || "#fff"); }
+} catch (e) {}
 </script>
 <style>
 :root{color-scheme:light;--bg:#f6f4ef;--card:#fff;--ink:#222;--mute:#666;--line:#ddd6c8;--acc:#7a1f1f;--on-acc:#fff;--acc2:#a33;--ok:#2e7d32;--bad:#b3261e}
@@ -23,6 +27,14 @@ select{font:inherit;color:inherit;background:var(--card);border:1px solid var(--
 .seg input{display:none}
 .seg label:has(input:checked){background:var(--acc);color:var(--on-acc)}
 .profile-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.swatches{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
+.swatch{width:28px;height:28px;border-radius:50%;border:2px solid var(--line);padding:0;cursor:pointer}
+.swatch[aria-pressed=true]{outline:3px solid var(--ink);outline-offset:2px}
+input[type=color]{width:40px;height:30px;border:1px solid var(--line);border-radius:6px;background:var(--card);padding:2px;cursor:pointer}
+.tool{display:flex;gap:8px;align-items:baseline;padding:3px 0}
+.cmd{display:flex;gap:8px;align-items:center;margin-top:8px}
+.cmd code{flex:1;font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 9px;overflow-wrap:anywhere}
+.lib li{align-items:center}
 .job, .items li, pre, .err, .hint{overflow-wrap:anywhere}  /* long web addresses must wrap, not widen the page */
 .items li > span{min-width:0}
 *{box-sizing:border-box}
@@ -81,10 +93,26 @@ body.dragging #drop{display:flex}
     <label><input type="radio" name="theme" value="dark"> Dark</label>
   </div>
   <div class="hint">System follows your computer's light/dark setting.</div>
+  <div style="margin-top:12px"><b>Accent color</b></div>
+  <div class="swatches" id="swatches">
+    <button class="swatch" data-c="" title="ZIMaker red (default)" aria-label="ZIMaker red (default)" style="background:#7a1f1f"></button>
+    <button class="swatch" data-c="#1d4ed8" title="Blue" aria-label="Blue" style="background:#1d4ed8"></button>
+    <button class="swatch" data-c="#0f766e" title="Teal" aria-label="Teal" style="background:#0f766e"></button>
+    <button class="swatch" data-c="#15803d" title="Green" aria-label="Green" style="background:#15803d"></button>
+    <button class="swatch" data-c="#6d28d9" title="Purple" aria-label="Purple" style="background:#6d28d9"></button>
+    <button class="swatch" data-c="#be185d" title="Pink" aria-label="Pink" style="background:#be185d"></button>
+    <button class="swatch" data-c="#c2410c" title="Orange" aria-label="Orange" style="background:#c2410c"></button>
+    <label class="hint" style="display:inline-flex;gap:6px;align-items:center">Custom <input type="color" id="s-accent" aria-label="Custom accent color"></label>
+  </div>
 
   <h3>Updates</h3>
   <label class="opt"><input type="checkbox" id="s-updates"> Check for new versions when ZIMaker opens</label>
   <div class="row"><button id="s-checknow">Check for updates now</button><span id="s-updmsg" class="hint" aria-live="polite"></span></div>
+
+  <h3>Optional tools</h3>
+  <div class="hint">Some file types need an extra program. They come from Ubuntu's own software collection; install them once with the command below.</div>
+  <div id="toollist" style="margin-top:6px"></div>
+  <div class="cmd" id="toolcmd"></div>
 
   <h3>Profiles</h3>
   <div class="hint">A profile is a named set of defaults, e.g. one for websites and one for scanned books. Pick one on the main screen to fill in all the options at once.</div>
@@ -108,6 +136,8 @@ body.dragging #drop{display:flex}
   <label class="opt"><input type="radio" name="s-scope" value="page"> Just the linked page</label>
   <label class="opt"><input type="radio" name="s-scope" value="site"> The whole site</label>
   <label class="opt"><input type="radio" name="s-scope" value="section"> Only the section I linked to</label>
+  <label class="opt"><input type="checkbox" id="s-webmedia"> Save audio and video from websites
+    <small>Only formats readers can play, up to 500 MB per file. Off keeps website ZIMs small.</small></label>
   <div style="margin-top:8px"><b>Image quality</b> <span class="hint">(page scans and pictures)</span></div>
   <select id="s-quality">
     <option value="small">Smaller files (1400 px, lower quality)</option>
@@ -149,10 +179,15 @@ body.dragging #drop{display:flex}
       <ul class="hint" style="margin:6px 0 0;padding-left:18px">
         <li><b>Ebooks:</b> EPUB, MOBI, AZW, AZW3, FB2</li>
         <li><b>Documents:</b> Word (DOCX), OpenDocument (ODT), RTF, PowerPoint (PPTX), Excel (XLSX), CSV, Markdown, plain text, HTML, Jupyter notebooks, LaTeX, and more</li>
+        <li><b>Older office files*:</b> DOC, XLS, PPT, ODP, ODS, ODG, WordPerfect, Publisher, Visio</li>
         <li><b>Page-based:</b> PDF, XPS, CBZ comics</li>
-        <li><b>Pictures:</b> JPG, PNG, GIF, WEBP, TIFF, BMP, SVG (all pictures in one job become one gallery)</li>
-        <li><b>ZIP files:</b> a saved website folder, a folder of pictures (like a comic), or a mix of the files above</li>
-        <li>Not supported: old Office files (.doc, .xls, .ppt — save them in the newer format first), DjVu, CBR/RAR, audio and video</li>
+        <li><b>Saved web pages:</b> MHTML / MHT (your browser's “Save as → single file”; handy for sites that block downloads)</li>
+        <li><b>Emails:</b> EML messages and MBOX mailboxes</li>
+        <li><b>Pictures:</b> JPG, PNG, GIF, WEBP, HEIC (iPhone), AVIF, TIFF, BMP, SVG, PSD and more (all pictures in one job become one gallery)</li>
+        <li><b>Audio and video*:</b> MP4, MKV, MOV, AVI, WebM, WMV, MP3, M4A, WAV, FLAC, OGG and more, with .srt / .vtt subtitles</li>
+        <li><b>Archives:</b> ZIP, TAR (.tar.gz …), and 7Z, RAR, CBR/CB7 comics, CHM help files*: a saved website, a comic, or each file inside converted</li>
+        <li>* needs an optional tool — see ⚙ Settings → Optional tools</li>
+        <li>Not supported: DjVu, Apple iWork files (export them first), streaming sites like YouTube</li>
       </ul></details>
     <ul class="items" id="files"></ul>
     <details style="margin-top:10px"><summary>Very large file? Use its path instead of uploading</summary>
@@ -198,6 +233,15 @@ body.dragging #drop{display:flex}
     <h2>Jobs</h2>
     <div id="jobs"><p class="hint">Nothing yet.</p></div>
   </div>
+
+  <div class="card">
+    <h2>Your ZIM files</h2>
+    <div class="hint">Preview any ZIM file: the ones you've made, or any other (drop a .zim onto the window, or enter its path).</div>
+    <div class="row"><input type="text" id="zimpath" placeholder="C:\Users\you\Downloads\wikipedia.zim" style="flex:1;min-width:200px">
+      <button id="openzim">Open</button></div>
+    <div class="hint" id="zimmsg"></div>
+    <ul class="items lib" id="library"><li class="hint">Nothing yet.</li></ul>
+  </div>
 </main>
 <script>
 const $ = s => document.querySelector(s);
@@ -230,7 +274,12 @@ $("#check").onclick = async () => {
 };
 
 $("#pick").onclick = () => $("#file").click();
-$("#file").onchange = async () => { await addFiles([...$("#file").files]); $("#file").value = ""; };
+$("#file").onchange = async () => {
+  const picked = [...$("#file").files];
+  picked.filter(f => /\.zim$/i.test(f.name)).forEach(uploadAndOpenZim);
+  await addFiles(picked.filter(f => !/\.zim$/i.test(f.name)));
+  $("#file").value = "";
+};
 
 async function addFiles(list) {
   for (const f of list) {
@@ -252,7 +301,9 @@ window.addEventListener("dragleave", () => { if (--depth <= 0) { depth = 0; docu
 window.addEventListener("drop", e => {
   e.preventDefault(); depth = 0; document.body.classList.remove("dragging");
   const dropped = [...(e.dataTransfer.files || [])];
-  if (dropped.length) { addFiles(dropped); return; }
+  const zims = dropped.filter(f => /\.zim$/i.test(f.name));
+  zims.forEach(uploadAndOpenZim);
+  if (dropped.length) { if (dropped.length > zims.length) addFiles(dropped.filter(f => !/\.zim$/i.test(f.name))); return; }
   const text = e.dataTransfer.getData("text/uri-list") || e.dataTransfer.getData("text/plain") || "";
   const links = text.split(/\s+/).filter(s => /^https?:\/\//i.test(s));
   if (!links.length) { $("#checkmsg").innerHTML = '<span class="err">That doesn\'t look like a web address.</span>'; return; }
@@ -277,12 +328,81 @@ function renderFiles() {
   document.querySelectorAll(".rm").forEach(b => b.onclick = () => { files.splice(+b.dataset.i, 1); renderFiles(); });
 }
 
+// ---- your ZIM files: library and viewer
+let lastDone = -1;
+async function openZim(path) {
+  $("#zimmsg").textContent = "Opening…";
+  try {
+    const z = await api("/api/zim/open", {method: "POST", body: JSON.stringify({path})});
+    $("#zimmsg").textContent = "";
+    window.open(`/viewer?z=${z.id}&t=${encodeURIComponent(z.title)}`, "_blank", "width=1150,height=900");
+    loadLibrary();
+  } catch (e) { $("#zimmsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+async function uploadAndOpenZim(f) {
+  $("#zimmsg").textContent = `Loading ${f.name} (${(f.size / 1e6).toFixed(0)} MB)…`;
+  try {
+    const r = await api("/api/upload?name=" + encodeURIComponent(f.name), {method: "PUT", body: f});
+    await openZim(r.path);
+  } catch (e) { $("#zimmsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+async function loadLibrary() {
+  const r = await api("/api/zim/library").catch(() => ({items: []}));
+  $("#library").innerHTML = r.items.length ? r.items.map(z => `<li><span><b>${esc(z.title)}</b> <span class="hint">${(z.size / 1e6).toFixed(1)} MB</span><br>
+      <span class="hint">${esc(z.path)}</span></span>
+      <span style="white-space:nowrap"><button class="preview" data-p="${esc(z.path)}">Preview</button>
+      <button class="libopen" data-p="${esc(z.path)}">Open folder</button></span></li>`).join("")
+    : '<li class="hint">Nothing yet.</li>';
+  $("#library").querySelectorAll(".preview").forEach(b => b.onclick = () => openZim(b.dataset.p));
+  $("#library").querySelectorAll(".libopen").forEach(b => b.onclick = () => api("/api/open", {method: "POST", body: JSON.stringify({path: b.dataset.p})}));
+}
+$("#openzim").onclick = () => { const p = $("#zimpath").value.trim(); if (p) openZim(p); };
+$("#zimpath").addEventListener("keydown", e => { if (e.key === "Enter") $("#openzim").click(); });
+
+// ---- accent color: one color for buttons and highlights; text on it is dark or light, whichever reads better
+function onAccentFor(hex) {
+  const n = parseInt(hex.slice(1), 16), lin = c => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+  const L = 0.2126 * lin(n >> 16 & 255) + 0.7152 * lin(n >> 8 & 255) + 0.0722 * lin(n & 255);
+  return L > 0.25 ? "#1b1a18" : "#ffffff";
+}
+function setAccent(hex) {
+  const st = document.documentElement.style;
+  if (/^#[0-9a-f]{6}$/i.test(hex || "")) {
+    const on = onAccentFor(hex);
+    st.setProperty("--acc", hex); st.setProperty("--on-acc", on);
+    store.set("accent", hex); store.set("onAccent", on);
+  } else {
+    st.removeProperty("--acc"); st.removeProperty("--on-acc");
+    try { localStorage.removeItem("accent"); localStorage.removeItem("onAccent"); } catch (e) {}
+  }
+}
+function markSwatch(hex) {
+  document.querySelectorAll(".swatch").forEach(s => s.setAttribute("aria-pressed", String((s.dataset.c || "") === (hex || ""))));
+  $("#s-accent").value = hex || "#7a1f1f";
+}
+document.querySelectorAll(".swatch").forEach(s => s.onclick = () => { draft.accent = s.dataset.c; setAccent(draft.accent); markSwatch(draft.accent); });
+$("#s-accent").addEventListener("input", () => { draft.accent = $("#s-accent").value; setAccent(draft.accent); markSwatch(draft.accent); });
+
+// ---- optional tools (FFmpeg, 7-Zip, LibreOffice): what's installed, and the command to install the rest
+async function loadTools() {
+  const t = await api("/api/tools").catch(() => null);
+  if (!t) return;
+  $("#toollist").innerHTML = t.tools.map(x => `<div class="tool"><span>${x.installed ? '<span class="good">✓</span>' : '<span class="err">✗</span>'}</span>
+    <span><b>${esc(x.label)}</b> <span class="hint">— ${esc(x.for)}${x.installed ? "" : " (not installed)"}</span></span></div>`).join("");
+  const missing = t.tools.some(x => !x.installed);
+  $("#toolcmd").innerHTML = !missing ? '<span class="good">Everything is installed.</span>'
+    : `<code id="cmdtext">${esc(t.command)}</code><button id="copycmd">Copy</button>`
+      + `<span class="hint" style="flex-basis:100%">${t.windows ? "Paste it into Windows PowerShell and press Enter (it asks Windows for permission). Takes a few minutes; then reopen Settings."
+                                                             : "Run it in a terminal (it asks for your password). Then reopen Settings."}</span>`;
+  if (missing) $("#copycmd").onclick = () => navigator.clipboard.writeText(t.command).then(() => { $("#copycmd").textContent = "Copied"; });
+}
+
 // ---- settings: theme, update checks, profiles
 let settings = null, draft = null, editing = null, defaultOutput = "";
 const radio = (name, v) => { const el = document.querySelector(`input[name="${name}"][value="${v}"]`); if (el) el.checked = true; };
 const radioVal = name => (document.querySelector(`input[name="${name}"]:checked`) || {}).value;
 const freshProfile = () => ({mode: "pictures", combine: false, output_dir: defaultOutput, max_pages: 300,
-                             scope: "site", quality: "balanced", sensitivity: "balanced"});
+                             scope: "site", web_media: false, quality: "balanced", sensitivity: "balanced"});
 function setTheme(t) {
   store.set("theme", t);
   if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
@@ -300,6 +420,7 @@ function applyProfile(name) {
 async function loadSettings() {
   settings = await api("/api/settings");
   setTheme(settings.theme);
+  setAccent(settings.accent);
   fillProfileSelect($("#profile"), Object.keys(settings.profiles), settings.active);
   applyProfile(settings.active);
 }
@@ -328,6 +449,7 @@ function showDraftProfile() {
   radio("s-mode", p.mode); radio("s-combine", p.combine ? "1" : "0"); radio("s-scope", p.scope);
   $("#s-outdir").value = p.output_dir; $("#s-maxpages").value = p.max_pages;
   $("#s-quality").value = p.quality; $("#s-sensitivity").value = p.sensitivity;
+  $("#s-webmedia").checked = !!p.web_media;
   fillProfileSelect($("#s-profile"), Object.keys(draft.profiles), editing);
   $("#p-del").disabled = Object.keys(draft.profiles).length < 2;
 }
@@ -336,7 +458,7 @@ function readDraftProfile() {
   Object.assign(draft.profiles[editing], {
     mode: radioVal("s-mode"), combine: radioVal("s-combine") === "1", scope: radioVal("s-scope"),
     output_dir: $("#s-outdir").value.trim(), max_pages: parseInt($("#s-maxpages").value, 10) || 300,
-    quality: $("#s-quality").value, sensitivity: $("#s-sensitivity").value});
+    quality: $("#s-quality").value, sensitivity: $("#s-sensitivity").value, web_media: $("#s-webmedia").checked});
 }
 function askName(question, start) {
   const n = (prompt(question, start || "") || "").trim().replace(/\s+/g, " ").slice(0, 40);
@@ -344,11 +466,13 @@ function askName(question, start) {
   if (draft.profiles[n] && n !== start) { alert(`There's already a profile called “${n}”.`); return null; }
   return n;
 }
-function closeSettings() { $("#settings").style.display = "none"; setTheme(settings.theme); }
+function closeSettings() { $("#settings").style.display = "none"; setTheme(settings.theme); setAccent(settings.accent); }
 $("#opensettings").onclick = () => {
   draft = JSON.parse(JSON.stringify(settings));
   editing = draft.active;
   radio("theme", draft.theme);
+  markSwatch(draft.accent);
+  loadTools();
   $("#s-updates").checked = draft.check_updates;
   showDraftProfile();
   $("#settingsmsg").textContent = "";
@@ -392,6 +516,7 @@ $("#savesettings").onclick = async () => {
   try {
     await saveSettings(draft);
     setTheme(settings.theme);
+    setAccent(settings.accent);
     fillProfileSelect($("#profile"), Object.keys(settings.profiles), settings.active);
     applyProfile(settings.active);
     $("#settings").style.display = "none";
@@ -433,7 +558,7 @@ function jobHtml(j) {
   const colour = {done: "good", failed: "err", interrupted: "err", cancelled: "hint"}[j.status] || "";
   const res = j.result || {};
   const fileList = (res.files || []).map(f => `<li><span>${esc(f.path)} <span class="hint">${(f.size / 1e6).toFixed(1)} MB${f.check === "fail" ? " · validation warnings" : ""}</span></span>
-      <button class="open" data-p="${esc(f.path)}">Open folder</button></li>`).join("");
+      <span><button class="preview" data-p="${esc(f.path)}">Preview</button> <button class="open" data-p="${esc(f.path)}">Open folder</button></span></li>`).join("");
   const errs = (res.errors || []).map(e => `<div class="err">${esc(e)}</div>`).join("");
   return `<div class="job" data-id="${j.id}">
     <div class="row" style="justify-content:space-between;margin:0"><b>${esc(j.label)}</b>
@@ -512,6 +637,9 @@ async function poll() {
     $("#jobs").innerHTML = s.jobs.length ? s.jobs.map(jobHtml).join("") : '<p class="hint">Nothing yet.</p>';
     document.querySelectorAll("details[data-log]").forEach(d => d.ontoggle = () => d.open ? openLogs.add(d.dataset.log) : openLogs.delete(d.dataset.log));
     document.querySelectorAll(".open").forEach(b => b.onclick = () => api("/api/open", {method: "POST", body: JSON.stringify({path: b.dataset.p})}));
+    document.querySelectorAll("#jobs .preview").forEach(b => b.onclick = () => openZim(b.dataset.p));
+    const doneNow = s.jobs.filter(j => j.status === "done").length;
+    if (doneNow !== lastDone) { lastDone = doneNow; loadLibrary(); }
     document.querySelectorAll(".cancel").forEach(b => b.onclick = () => api(`/api/jobs/${b.dataset.id}/cancel`, {method: "POST"}).then(poll));
     document.querySelectorAll(".del").forEach(b => b.onclick = () => api(`/api/jobs/${b.dataset.id}/delete`, {method: "POST"}).then(poll));
   } catch (e) {
@@ -520,6 +648,7 @@ async function poll() {
   }
 }
 loadSettings().catch(() => {});
+loadLibrary();
 poll(); setInterval(poll, 2000);
 </script>
 </body>
