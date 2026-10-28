@@ -109,11 +109,6 @@ body.dragging #drop{display:flex}
   <label class="opt"><input type="checkbox" id="s-updates"> Check for new versions when ZIMaker opens</label>
   <div class="row"><button id="s-checknow">Check for updates now</button><span id="s-updmsg" class="hint" aria-live="polite"></span></div>
 
-  <h3>Optional tools</h3>
-  <div class="hint">Some file types need an extra program. They come from Ubuntu's own software collection; install them once with the command below.</div>
-  <div id="toollist" style="margin-top:6px"></div>
-  <div class="cmd" id="toolcmd"></div>
-
   <h3>Profiles</h3>
   <div class="hint">A profile is a named set of defaults, e.g. one for websites and one for scanned books. Pick one on the main screen to fill in all the options at once.</div>
   <div class="profile-row" style="margin-top:8px">
@@ -150,6 +145,11 @@ body.dragging #drop{display:flex}
     <option value="balanced">Balanced — recommended</option>
     <option value="fewer">Fewer false alarms (only clear pictures)</option>
   </select>
+
+  <h3>Optional tools</h3>
+  <div class="hint">Some file types need an extra program. They come from Ubuntu's own software collection; install them once with the command below.</div>
+  <div id="toollist" style="margin-top:6px"></div>
+  <div class="cmd" id="toolcmd"></div>
 
   <div class="row" style="margin-top:20px;justify-content:flex-end">
     <span class="hint" id="settingsmsg"></span>
