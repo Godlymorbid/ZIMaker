@@ -5,9 +5,26 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ZIMaker</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%237a1f1f'/%3E%3Cpath d='M12 18c7-3 14-3 20 2v30c-6-5-13-5-20-2z' fill='%23f5eedc'/%3E%3Cpath d='M52 18c-7-3-14-3-20 2v30c6-5 13-5 20-2z' fill='%23fff'/%3E%3C/svg%3E">
+<script>/* apply the saved theme before anything is drawn (no flash) */
+try { const t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 <style>
-:root{--bg:#f6f4ef;--card:#fff;--ink:#222;--mute:#666;--line:#ddd6c8;--acc:#7a1f1f;--acc2:#a33;--ok:#2e7d32;--bad:#b3261e}
-@media (prefers-color-scheme:dark){:root{--bg:#1b1a18;--card:#262421;--ink:#eee;--mute:#aaa;--line:#3b3833;--acc:#e08a7a;--acc2:#f0a090;--ok:#7bc67e;--bad:#ff8a80}}
+:root{color-scheme:light;--bg:#f6f4ef;--card:#fff;--ink:#222;--mute:#666;--line:#ddd6c8;--acc:#7a1f1f;--on-acc:#fff;--acc2:#a33;--ok:#2e7d32;--bad:#b3261e}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){color-scheme:dark;--bg:#1b1a18;--card:#262421;--ink:#eee;--mute:#aaa;--line:#3b3833;--acc:#e08a7a;--on-acc:#1b1a18;--acc2:#f0a090;--ok:#7bc67e;--bad:#ff8a80}}
+:root[data-theme=dark]{color-scheme:dark;--bg:#1b1a18;--card:#262421;--ink:#eee;--mute:#aaa;--line:#3b3833;--acc:#e08a7a;--on-acc:#1b1a18;--acc2:#f0a090;--ok:#7bc67e;--bad:#ff8a80}
+select{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+#settings{position:fixed;inset:0;display:none;z-index:15;background:rgba(0,0,0,.45);overflow:auto;padding:30px 16px}
+#settings .panel{max-width:720px;margin:0 auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+#settings h2{font-size:18px;margin:0 0 4px}
+#settings h3{font-size:15px;margin:18px 0 6px;padding-top:12px;border-top:1px solid var(--line)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg label{padding:6px 14px;cursor:pointer;border-right:1px solid var(--line)}
+.seg label:last-child{border-right:none}
+.seg input{display:none}
+.seg label:has(input:checked){background:var(--acc);color:var(--on-acc)}
+.profile-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.job, .items li, pre, .err, .hint{overflow-wrap:anywhere}  /* long web addresses must wrap, not widen the page */
+.items li > span{min-width:0}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
 main{max-width:860px;margin:0 auto;padding:20px 16px 60px}
@@ -18,7 +35,7 @@ h1{font-size:24px;margin:8px 0 4px}
 textarea,input[type=text]{width:100%;font:inherit;color:inherit;background:transparent;border:1px solid var(--line);border-radius:6px;padding:8px}
 textarea{min-height:80px;resize:vertical}
 button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:6px;padding:7px 14px;cursor:pointer}
-button.primary{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600;padding:10px 22px}
+button.primary{background:var(--acc);border-color:var(--acc);color:var(--on-acc);font-weight:600;padding:10px 22px}
 button:disabled{opacity:.5;cursor:default}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px}
 .opt{display:block;padding:6px 0}
@@ -54,11 +71,66 @@ body.dragging #drop{display:flex}
 <div id="stopped"><h1>ZIMaker has stopped</h1><p class="sub">You can close this window. Start it again from the desktop icon.</p></div>
 <div id="updating"><h1>Updating ZIMaker…</h1><p class="sub" id="updmsg">This takes about a minute. This window will refresh by itself.</p>
   <div class="bar indef" style="width:260px"><div></div></div></div>
+<div id="settings" role="dialog" aria-modal="true" aria-labelledby="settings-title"><div class="panel">
+  <div class="row" style="justify-content:space-between;margin:0"><h2 id="settings-title">Settings</h2><button id="closesettings" aria-label="Close settings">✕</button></div>
+
+  <h3>Appearance</h3>
+  <div class="seg" id="themes">
+    <label><input type="radio" name="theme" value="system"> System</label>
+    <label><input type="radio" name="theme" value="light"> Light</label>
+    <label><input type="radio" name="theme" value="dark"> Dark</label>
+  </div>
+  <div class="hint">System follows your computer's light/dark setting.</div>
+
+  <h3>Updates</h3>
+  <label class="opt"><input type="checkbox" id="s-updates"> Check for new versions when ZIMaker opens</label>
+
+  <h3>Profiles</h3>
+  <div class="hint">A profile is a named set of defaults, e.g. one for websites and one for scanned books. Pick one on the main screen to fill in all the options at once.</div>
+  <div class="profile-row" style="margin-top:8px">
+    <select id="s-profile" aria-label="Profile to edit"></select>
+    <button id="p-new">New</button><button id="p-dup">Duplicate</button><button id="p-ren">Rename</button><button id="p-del">Delete</button>
+  </div>
+
+  <h3>Defaults for this profile</h3>
+  <div><b>Page images</b></div>
+  <label class="opt"><input type="radio" name="s-mode" value="pictures"> Only pages with pictures</label>
+  <label class="opt"><input type="radio" name="s-mode" value="all"> Every page as an image</label>
+  <label class="opt"><input type="radio" name="s-mode" value="none"> Text only</label>
+  <div style="margin-top:8px"><b>Output</b></div>
+  <label class="opt"><input type="radio" name="s-combine" value="0"> One ZIM per book / volume</label>
+  <label class="opt"><input type="radio" name="s-combine" value="1"> Combine everything into one ZIM</label>
+  <div style="margin-top:8px"><b>Save to folder</b></div>
+  <input type="text" id="s-outdir">
+  <div style="margin-top:8px"><b>Websites</b></div>
+  <div class="row" style="margin-top:4px">Save up to <input type="text" id="s-maxpages" style="width:90px"> pages</div>
+  <label class="opt"><input type="radio" name="s-scope" value="page"> Just the linked page</label>
+  <label class="opt"><input type="radio" name="s-scope" value="site"> The whole site</label>
+  <label class="opt"><input type="radio" name="s-scope" value="section"> Only the section I linked to</label>
+  <div style="margin-top:8px"><b>Image quality</b> <span class="hint">(page scans and pictures)</span></div>
+  <select id="s-quality">
+    <option value="small">Smaller files (1400 px, lower quality)</option>
+    <option value="balanced">Balanced (1800 px) — recommended</option>
+    <option value="sharp">Sharper (2400 px, larger files)</option>
+  </select>
+  <div style="margin-top:8px"><b>Picture detection</b> <span class="hint">(scanned books and PDFs, with "Only pages with pictures")</span></div>
+  <select id="s-sensitivity">
+    <option value="more">Catch more pictures (small diagrams too; a few extra scans)</option>
+    <option value="balanced">Balanced — recommended</option>
+    <option value="fewer">Fewer false alarms (only clear pictures)</option>
+  </select>
+
+  <div class="row" style="margin-top:20px;justify-content:flex-end">
+    <span class="hint" id="settingsmsg"></span>
+    <button id="cancelsettings">Cancel</button><button class="primary" id="savesettings">Save</button>
+  </div>
+</div></div>
 <main>
   <header>
     <div><h1>ZIMaker</h1>
     <p class="sub">Turn websites, archive.org books, ebooks, documents and pictures into ZIM files for Kiwix.</p></div>
-    <div class="hdr-btns"><button id="checkupd" title="Look for a newer version on GitHub">Check for updates</button>
+    <div class="hdr-btns"><button id="opensettings" title="Theme, profiles and defaults">⚙ Settings</button>
+      <button id="checkupd" title="Look for a newer version on GitHub">Check for updates</button>
       <button id="quit" title="Stop ZIMaker">Quit</button></div>
   </header>
   <div class="card" id="update"></div>
@@ -90,6 +162,10 @@ body.dragging #drop{display:flex}
 
   <div class="card">
     <h2>2. Options</h2>
+    <div class="profile-row"><b>Profile</b> <select id="profile"></select>
+      <button id="saveprofile" title="Make the options below this profile's defaults">Save options to profile</button>
+      <span class="hint" id="profilemsg"></span></div>
+    <div class="hint" style="margin:4px 0 10px">The options below start from the profile. Change them here for one job, or edit profiles in ⚙ Settings.</div>
     <div><b>Page images</b></div>
     <label class="opt"><input type="radio" name="mode" value="pictures" checked> Only pages with pictures
       <small>Text on every page; the scan is shown only where there's an illustration, map or plate. Small files.</small></label>
@@ -201,7 +277,130 @@ function renderFiles() {
   document.querySelectorAll(".rm").forEach(b => b.onclick = () => { files.splice(+b.dataset.i, 1); renderFiles(); });
 }
 
-$("#outdir").value = store.get("outdir") || "";
+// ---- settings: theme, update checks, profiles
+let settings = null, draft = null, editing = null, defaultOutput = "";
+const radio = (name, v) => { const el = document.querySelector(`input[name="${name}"][value="${v}"]`); if (el) el.checked = true; };
+const radioVal = name => (document.querySelector(`input[name="${name}"]:checked`) || {}).value;
+const freshProfile = () => ({mode: "pictures", combine: false, output_dir: defaultOutput, max_pages: 300,
+                             scope: "site", quality: "balanced", sensitivity: "balanced"});
+function setTheme(t) {
+  store.set("theme", t);
+  if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  else delete document.documentElement.dataset.theme;
+}
+function fillProfileSelect(sel, names, current) {
+  sel.innerHTML = names.map(n => `<option${n === current ? " selected" : ""}>${esc(n)}</option>`).join("");
+}
+function applyProfile(name) {
+  const p = settings.profiles[name];
+  if (!p) return;
+  radio("mode", p.mode); radio("combine", p.combine ? "1" : "0"); radio("scope", p.scope);
+  $("#maxpages").value = p.max_pages; $("#outdir").value = p.output_dir;
+}
+async function loadSettings() {
+  settings = await api("/api/settings");
+  setTheme(settings.theme);
+  fillProfileSelect($("#profile"), Object.keys(settings.profiles), settings.active);
+  applyProfile(settings.active);
+}
+async function saveSettings(s) {
+  settings = await api("/api/settings", {method: "POST", body: JSON.stringify(s)});
+  return settings;
+}
+$("#profile").onchange = async () => {
+  settings.active = $("#profile").value;
+  applyProfile(settings.active);
+  await saveSettings(settings).catch(() => {});
+};
+$("#saveprofile").onclick = async () => {
+  const name = settings.active, p = settings.profiles[name];
+  Object.assign(p, {mode: radioVal("mode"), combine: radioVal("combine") === "1", scope: radioVal("scope"),
+                    max_pages: parseInt($("#maxpages").value, 10) || p.max_pages,
+                    output_dir: $("#outdir").value.trim() || p.output_dir});
+  try { await saveSettings(settings); $("#profilemsg").innerHTML = `<span class="good">Saved to “${esc(name)}”.</span>`; }
+  catch (e) { $("#profilemsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  setTimeout(() => { $("#profilemsg").textContent = ""; }, 4000);
+};
+
+// the Settings panel edits a copy; Save writes it, Cancel throws it away
+function showDraftProfile() {
+  const p = draft.profiles[editing];
+  radio("s-mode", p.mode); radio("s-combine", p.combine ? "1" : "0"); radio("s-scope", p.scope);
+  $("#s-outdir").value = p.output_dir; $("#s-maxpages").value = p.max_pages;
+  $("#s-quality").value = p.quality; $("#s-sensitivity").value = p.sensitivity;
+  fillProfileSelect($("#s-profile"), Object.keys(draft.profiles), editing);
+  $("#p-del").disabled = Object.keys(draft.profiles).length < 2;
+}
+function readDraftProfile() {
+  if (!editing || !draft.profiles[editing]) return;
+  Object.assign(draft.profiles[editing], {
+    mode: radioVal("s-mode"), combine: radioVal("s-combine") === "1", scope: radioVal("s-scope"),
+    output_dir: $("#s-outdir").value.trim(), max_pages: parseInt($("#s-maxpages").value, 10) || 300,
+    quality: $("#s-quality").value, sensitivity: $("#s-sensitivity").value});
+}
+function askName(question, start) {
+  const n = (prompt(question, start || "") || "").trim().replace(/\s+/g, " ").slice(0, 40);
+  if (!n) return null;
+  if (draft.profiles[n] && n !== start) { alert(`There's already a profile called “${n}”.`); return null; }
+  return n;
+}
+function closeSettings() { $("#settings").style.display = "none"; setTheme(settings.theme); }
+$("#opensettings").onclick = () => {
+  draft = JSON.parse(JSON.stringify(settings));
+  editing = draft.active;
+  radio("theme", draft.theme);
+  $("#s-updates").checked = draft.check_updates;
+  showDraftProfile();
+  $("#settingsmsg").textContent = "";
+  $("#settings").style.display = "block";
+};
+document.querySelectorAll("input[name=theme]").forEach(r => r.onchange = () => { draft.theme = r.value; setTheme(r.value); });
+$("#s-profile").onchange = () => { readDraftProfile(); editing = $("#s-profile").value; showDraftProfile(); };
+$("#p-new").onclick = () => {
+  readDraftProfile();
+  const n = askName("Name for the new profile (it starts with the standard defaults):");
+  if (!n) return;
+  draft.profiles[n] = freshProfile(); editing = n; showDraftProfile();
+};
+$("#p-dup").onclick = () => {
+  readDraftProfile();
+  const n = askName(`Name for the copy of “${editing}”:`, `${editing} copy`);
+  if (!n) return;
+  draft.profiles[n] = JSON.parse(JSON.stringify(draft.profiles[editing])); editing = n; showDraftProfile();
+};
+$("#p-ren").onclick = () => {
+  readDraftProfile();
+  const n = askName(`New name for “${editing}”:`, editing);
+  if (!n || n === editing) return;
+  const renamed = {};  // keep the order of the list
+  for (const [k, v] of Object.entries(draft.profiles)) renamed[k === editing ? n : k] = v;
+  draft.profiles = renamed;
+  if (draft.active === editing) draft.active = n;
+  editing = n; showDraftProfile();
+};
+$("#p-del").onclick = () => {
+  if (Object.keys(draft.profiles).length < 2) return;
+  if (!confirm(`Delete the profile “${editing}”?`)) return;
+  delete draft.profiles[editing];
+  if (draft.active === editing) draft.active = Object.keys(draft.profiles)[0];
+  editing = draft.active; showDraftProfile();
+};
+$("#savesettings").onclick = async () => {
+  readDraftProfile();
+  draft.check_updates = $("#s-updates").checked;
+  try {
+    await saveSettings(draft);
+    setTheme(settings.theme);
+    fillProfileSelect($("#profile"), Object.keys(settings.profiles), settings.active);
+    applyProfile(settings.active);
+    $("#settings").style.display = "none";
+  } catch (e) { $("#settingsmsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+};
+$("#cancelsettings").onclick = closeSettings;
+$("#closesettings").onclick = closeSettings;
+$("#settings").onclick = e => { if (e.target.id === "settings") closeSettings(); };
+document.addEventListener("keydown", e => { if (e.key === "Escape" && $("#settings").style.display === "block") closeSettings(); });
+
 $("#build").onclick = async () => {
   const body = {
     links: $("#links").value,
@@ -213,9 +412,9 @@ $("#build").onclick = async () => {
     output_dir: $("#outdir").value.trim(),
     max_pages: parseInt($("#maxpages").value, 10) || 300,
     scope: document.querySelector("input[name=scope]:checked").value,
+    profile: settings ? settings.active : undefined,
   };
   if (files.some(f => f.state === "uploading")) { $("#buildmsg").textContent = "Wait for uploads to finish."; return; }
-  store.set("outdir", body.output_dir);
   $("#build").disabled = true; $("#buildmsg").textContent = "";
   try {
     await api("/api/jobs", {method: "POST", body: JSON.stringify(body)});
@@ -275,10 +474,13 @@ async function doUpdate() {
   updating = true;
   $("#updating").style.display = "flex";
   const t0 = Date.now();
+  let wentDown = false;
   while (Date.now() - t0 < 5 * 60 * 1000) {
     await new Promise(res => setTimeout(res, 2000));
-    const p = await fetch("/api/ping").then(x => x.json()).catch(() => null);
-    if (p && p.started && p.started !== before) { location.reload(); return; }
+    const p = await fetch("/api/ping", {cache: "no-store"}).then(x => x.json()).catch(() => null);
+    if (!p) { wentDown = true; continue; }
+    // the new version is running: it reports a new start time, or it came back after being down
+    if ((p.started && p.started !== before) || wentDown) { location.reload(); return; }
   }
   $("#updmsg").innerHTML = 'The update is taking longer than expected. Close this window and open ZIMaker again.<br>' +
     'Details are in <code>%TEMP%\\ZIMaker-update.log</code> (Windows) or <code>~/.zimaker/update.log</code> (Linux).';
@@ -289,7 +491,8 @@ async function poll() {
   try {
     const s = await api("/api/status");
     const st = s.setup;
-    if (st.state === "ready" && !checkedOnce) { checkedOnce = true; checkUpdate(false); }
+    if (st.state === "ready" && !checkedOnce && settings) { checkedOnce = true; if (settings.check_updates) checkUpdate(false); }
+    defaultOutput = s.default_output || defaultOutput;
     $("#setup").style.display = st.state === "ready" ? "none" : "block";
     $("#setup").innerHTML = st.state === "error" ? `<span class="err">${esc(st.message)}</span>`
       : `<b>Getting ready…</b> <span class="hint">${esc(st.message || "")}</span><div class="bar indef"><div></div></div>`;
@@ -305,6 +508,7 @@ async function poll() {
     $("#setup").innerHTML = '<span class="err">ZIMaker isn\'t running any more. Close this window and start it again from the desktop icon.</span>';
   }
 }
+loadSettings().catch(() => {});
 poll(); setInterval(poll, 2000);
 </script>
 </body>

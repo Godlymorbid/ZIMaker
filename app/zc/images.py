@@ -17,8 +17,17 @@ BUSY = 10         # uncovered-ink pixels for a cell to count as busy
 BLOB_MIN = 15     # cells in the largest cluster for a page to count as illustrated
 INK_PLATE = 0.10  # or: this share of the page is uncovered ink (photo plates, full-page maps)
 
-SCAN_WIDTH = 1800
+SCAN_WIDTH = 1800    # page scans (set per job from the profile's image quality; see settings.py)
 SCAN_QUALITY = 65
+PHOTO_SIDE = 2400    # gallery pictures
+PHOTO_QUALITY = 82
+
+if os.environ.get("ZIMAKER_TUNING"):  # per-job settings, also seen by worker processes that start fresh
+    try:
+        SCAN_WIDTH, SCAN_QUALITY, PHOTO_SIDE, PHOTO_QUALITY, BLOB_MIN = (
+            int(x) for x in os.environ["ZIMAKER_TUNING"].split(","))
+    except ValueError:
+        pass
 
 
 def _long_runs(m, axis):
@@ -79,8 +88,9 @@ def is_picture(img, W, H, words):
     return s["blob"] >= BLOB_MIN or s["ink"] >= INK_PLATE
 
 
-def save_photo(src, out, max_side=2400, quality=82):
+def save_photo(src, out, max_side=None, quality=None):
     """A picture for a gallery: upright, at most max_side px, colour kept, WebP."""
+    max_side, quality = max_side or PHOTO_SIDE, quality or PHOTO_QUALITY
     with Image.open(src) as im:
         im = ImageOps.exif_transpose(im)  # phone photos store their rotation separately
         im.thumbnail((max_side, max_side), Image.LANCZOS)
@@ -90,8 +100,9 @@ def save_photo(src, out, max_side=2400, quality=82):
     os.replace(out + ".tmp", out)
 
 
-def save_scan(img, out, width=SCAN_WIDTH, quality=SCAN_QUALITY):
+def save_scan(img, out, width=None, quality=None):
     """Resize, drop colour unless the page really has it (cream paper is not colour), save WebP."""
+    width, quality = width or SCAN_WIDTH, quality or SCAN_QUALITY
     img = img.convert("RGB")
     if img.width > width:
         img = img.resize((width, round(width * img.height / img.width)), Image.LANCZOS)

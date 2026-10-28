@@ -8,8 +8,8 @@ Turns websites, archive.org books, ebooks, documents and pictures into ZIM files
 
 ### Windows
 
-1. Unzip the downloaded zip anywhere.
-2. Double-click **`Install ZIMaker.cmd`**.
+1. Unzip the downloaded zip: right-click it and choose **Extract All…**. Don't run the installer from inside the zip; it needs the whole folder.
+2. In the extracted folder, double-click **`Install ZIMaker.cmd`**.
 
 The installer:
 
@@ -46,6 +46,22 @@ Requirements: Python 3.9 or newer, which most distributions include, on a 64-bit
 - **Linux:** open **ZIMaker** from your applications menu, or run `zimaker`.
 
 **Stopping:** close the window, and ZIMaker stops by itself about 2–3 minutes later. If a conversion is still running, it finishes the conversion first and then stops. The **Quit** button stops it straight away; it asks first if a conversion is running.
+
+## Settings
+
+Click **⚙ Settings** in the top corner.
+
+- **Appearance:** System, Light or Dark. System follows your computer's setting.
+- **Updates:** turn the automatic update check on or off.
+- **Profiles:** named sets of defaults. Examples: "Websites" (just the linked page, text only) and "Scanned books" (only pages with pictures, sharper images). Create, duplicate, rename and delete them. Each profile sets:
+  - page images
+  - one file or combined
+  - save folder
+  - website page limit and scope
+  - **image quality:** smaller files (1400 px), balanced (1800 px) or sharper (2400 px)
+  - **picture detection:** catch more pictures, balanced, or fewer false alarms
+
+On the main screen, pick a profile from **Profile** to fill in all the options at once. You can still change options for a single job, or click **Save options to profile** to keep them. Settings are stored in `~/.zimaker/settings.json`, so they survive updates and reinstalls.
 
 ## Updates
 

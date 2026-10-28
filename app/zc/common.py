@@ -1,4 +1,5 @@
 """Shared helpers: paths, logging/progress, downloads, text cleanup, filenames."""
+import functools
 import html
 import json
 import ntpath
@@ -235,8 +236,9 @@ def open_folder(p):
         subprocess.Popen(["xdg-open", target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+@functools.lru_cache(maxsize=1)
 def windows_profile():
-    """C:\\Users\\<name> of the Windows user, via WSL interop."""
+    """C:\\Users\\<name> of the Windows user, via WSL interop (asked once; it's slow-ish)."""
     if not IS_WSL:
         return ""
     try:

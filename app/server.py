@@ -150,6 +150,9 @@ class H(BaseHTTPRequestHandler):
             self.wfile.write(b)
         elif u.path == "/api/ping":
             self._json({"ok": True, "started": STARTED})
+        elif u.path == "/api/settings":
+            from zc import settings
+            self._json(settings.load())
         elif u.path == "/api/update":
             from zc import update
             force = urllib.parse.parse_qs(u.query).get("force") == ["1"]
@@ -244,9 +247,14 @@ class H(BaseHTTPRequestHandler):
             d = os.path.join(C.JOBS, jid)
             os.makedirs(d)
             label = ", ".join((s.get("name") or s.get("id")) for s in sources)
+            from zc import settings
+            st = settings.load()
+            pname = body.get("profile") if body.get("profile") in st["profiles"] else st["active"]
+            prof = st["profiles"][pname]
             job = {"sources": sources, "mode": body.get("mode", "pictures"), "combine": bool(body.get("combine")),
                    "title": body.get("title", ""), "output_dir": out_dir, "created": time.time(),
-                   "label": C.clip(label, 120),
+                   "label": C.clip(label, 120), "profile": pname,
+                   "quality": prof["quality"], "sensitivity": prof["sensitivity"],
                    "web": {"max_pages": int(body.get("max_pages") or 300),
                            "scope": body.get("scope") if body.get("scope") in ("section", "page") else "site"}}
             json.dump(job, open(os.path.join(d, "job.json"), "w", encoding="utf-8"))
@@ -270,6 +278,9 @@ class H(BaseHTTPRequestHandler):
             if act == "delete":
                 shutil.rmtree(d, ignore_errors=True)
             return self._json({"ok": True})
+        if u.path == "/api/settings":
+            from zc import settings
+            return self._json(settings.save(self._body()))
         if u.path == "/api/update/apply":
             from zc import update
             if busy():

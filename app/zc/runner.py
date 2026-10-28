@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from zc import common as C  # noqa: E402
 
 C.use_lib()
-from zc import builder, deps, formats, ia, web  # noqa: E402
+from zc import builder, deps, formats, ia, settings, web  # noqa: E402
 
 
 def unique(path):
@@ -38,6 +38,10 @@ def main(job_dir):
         os.makedirs(out_dir, exist_ok=True)
         mode = job.get("mode", "pictures")
         work = os.path.join(job_dir, "work")
+        settings.apply_to_images(job.get("quality", "balanced"), job.get("sensitivity", "balanced"))
+        if job.get("profile"):
+            log(f"Profile: {job['profile']} (image quality: {job.get('quality', 'balanced')}, "
+                f"picture detection: {job.get('sensitivity', 'balanced')})")
 
         # 1. expand sources into volumes (an archive.org item can contain several books;
         #    loose pictures from the whole job become one gallery)
