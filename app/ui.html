@@ -32,7 +32,7 @@ select{font:inherit;color:inherit;background:var(--card);border:1px solid var(--
 .swatch[aria-pressed=true]{outline:3px solid var(--ink);outline-offset:2px}
 input[type=color]{width:40px;height:30px;border:1px solid var(--line);border-radius:6px;background:var(--card);padding:2px;cursor:pointer}
 .tool{display:flex;gap:8px;align-items:baseline;padding:3px 0}
-.cmd{display:flex;gap:8px;align-items:center;margin-top:8px}
+.cmd{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
 .cmd code{flex:1;font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 9px;overflow-wrap:anywhere}
 .lib li{align-items:center}
 .job, .items li, pre, .err, .hint{overflow-wrap:anywhere}  /* long web addresses must wrap, not widen the page */
