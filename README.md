@@ -52,7 +52,7 @@ Requirements: Python 3.9 or newer, which most distributions include, on a 64-bit
 Click **⚙ Settings** in the top corner.
 
 - **Appearance:** System, Light or Dark. System follows your computer's setting.
-- **Updates:** turn the automatic update check on or off.
+- **Updates:** turn the automatic update check on or off, or click **Check for updates now**.
 - **Profiles:** named sets of defaults. Examples: "Websites" (just the linked page, text only) and "Scanned books" (only pages with pictures, sharper images). Create, duplicate, rename and delete them. Each profile sets:
   - page images
   - one file or combined
@@ -65,7 +65,7 @@ On the main screen, pick a profile from **Profile** to fill in all the options a
 
 ## Updates
 
-When it opens, ZIMaker checks this GitHub repository for a newer version, at most every 6 hours. If there is one, a banner offers **Update now**: ZIMaker downloads the latest version, reinstalls it in the background, and the window refreshes by itself in about a minute. It won't update while a conversion is running. You can also click **Check for updates** at any time.
+When it opens, ZIMaker checks this GitHub repository for a newer version, at most every 6 hours. If there is one, a banner offers **Update now**: ZIMaker downloads the latest version, reinstalls it in the background, and the window refreshes by itself in about a minute. It won't update while a conversion is running. To check yourself, go to **⚙ Settings → Updates → Check for updates now**.
 
 The check compares each installed file with the repository, so any change pushed to GitHub counts as an update. No version numbers to bump. The repository it checks is set in `app/update.json`; if you fork ZIMaker, change it there.
 

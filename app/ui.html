@@ -84,6 +84,7 @@ body.dragging #drop{display:flex}
 
   <h3>Updates</h3>
   <label class="opt"><input type="checkbox" id="s-updates"> Check for new versions when ZIMaker opens</label>
+  <div class="row"><button id="s-checknow">Check for updates now</button><span id="s-updmsg" class="hint" aria-live="polite"></span></div>
 
   <h3>Profiles</h3>
   <div class="hint">A profile is a named set of defaults, e.g. one for websites and one for scanned books. Pick one on the main screen to fill in all the options at once.</div>
@@ -129,8 +130,7 @@ body.dragging #drop{display:flex}
   <header>
     <div><h1>ZIMaker</h1>
     <p class="sub">Turn websites, archive.org books, ebooks, documents and pictures into ZIM files for Kiwix.</p></div>
-    <div class="hdr-btns"><button id="opensettings" title="Theme, profiles and defaults">⚙ Settings</button>
-      <button id="checkupd" title="Look for a newer version on GitHub">Check for updates</button>
+    <div class="hdr-btns"><button id="opensettings" title="Theme, profiles, defaults and updates">⚙ Settings</button>
       <button id="quit" title="Stop ZIMaker">Quit</button></div>
   </header>
   <div class="card" id="update"></div>
@@ -352,6 +352,7 @@ $("#opensettings").onclick = () => {
   $("#s-updates").checked = draft.check_updates;
   showDraftProfile();
   $("#settingsmsg").textContent = "";
+  $("#s-updmsg").textContent = "";
   $("#settings").style.display = "block";
 };
 document.querySelectorAll("input[name=theme]").forEach(r => r.onchange = () => { draft.theme = r.value; setTheme(r.value); });
@@ -464,10 +465,20 @@ async function checkUpdate(force) {
     showUpdate(u.error ? `<span class="err">${esc(u.error)}</span>` : '<span class="good">You have the latest version of ZIMaker.</span>', true);
   }
 }
-$("#checkupd").onclick = () => checkUpdate(true);
+// "Check for updates now" in Settings: result shown in the panel, with Update now if there's a new version
+$("#s-checknow").onclick = async () => {
+  $("#s-updmsg").textContent = "Checking…";
+  let u;
+  try { u = await api("/api/update?force=1"); } catch (e) { u = {error: e.message}; }
+  if (u.error) { $("#s-updmsg").innerHTML = `<span class="err">${esc(u.error)}</span>`; return; }
+  if (!u.available) { $("#s-updmsg").innerHTML = '<span class="good">You have the latest version of ZIMaker.</span>'; return; }
+  $("#s-updmsg").innerHTML = `<b>A new version is available.</b> Updated ${esc(u.date)}: ${esc(u.message)}
+    <button class="primary" id="s-doupdate" style="margin-left:8px">Update now</button>`;
+  $("#s-doupdate").onclick = () => { $("#settings").style.display = "none"; setTheme(settings.theme); doUpdate(); };
+};
 async function doUpdate() {
   const before = (await api("/api/ping").catch(() => ({}))).started;
-  $("#doupdate").disabled = true;
+  if ($("#doupdate")) $("#doupdate").disabled = true;
   const r = await api("/api/update/apply", {method: "POST", body: "{}"}).catch(e => ({error: e.message}));
   if (r.busy) { showUpdate('<span class="err">A conversion is running. Update when it has finished (or cancel it first).</span>'); return; }
   if (r.error) { showUpdate(`<span class="err">${esc(r.error)}</span>`); return; }
