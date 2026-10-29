@@ -79,6 +79,9 @@ frame.onload = () => {
   } catch (e) {}
 };
 
+// keep ZIMaker running while this window is open, even after the main window is closed
+if (zid) setInterval(() => fetch("/api/ping", {cache: "no-store"}).catch(() => {}), 30000);
+
 // title suggestions while typing; Enter / Search = full-text results
 let timer = null, sel = -1, items = [];
 async function api(u) { const r = await fetch(u); return r.json(); }

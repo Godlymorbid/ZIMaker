@@ -168,7 +168,7 @@ Write-Host "WSL is ready. ZIMaker will run in: $Distro"
 
 # 3. Stop a running copy (upgrade), then copy the files
 Step "Installing to $Dest"
-try { Invoke-WebRequest -UseBasicParsing -Method POST -Body '{"force": true}' 'http://localhost:8765/api/quit' -TimeoutSec 3 | Out-Null; Start-Sleep 2 } catch {}
+try { Invoke-WebRequest -UseBasicParsing -Method POST -Body '{"force": true}' 'http://127.0.0.1:8765/api/quit' -TimeoutSec 3 | Out-Null; Start-Sleep 2 } catch {}
 if ($Source -ne $Dest) {
   New-Item -ItemType Directory -Force $Dest | Out-Null
   foreach ($item in Get-ChildItem $Source -Force) {

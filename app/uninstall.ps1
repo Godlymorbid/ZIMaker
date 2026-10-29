@@ -4,7 +4,7 @@ $Dir = (Resolve-Path $Dir).Path.TrimEnd('\')
 $Installed = Join-Path $env:LOCALAPPDATA 'Programs\ZIMaker'
 
 Write-Host "Uninstalling ZIMaker" -ForegroundColor Yellow
-try { Invoke-WebRequest -UseBasicParsing -Method POST -Body '{"force": true}' 'http://localhost:8765/api/quit' -TimeoutSec 3 | Out-Null; Start-Sleep 2 } catch {}
+try { Invoke-WebRequest -UseBasicParsing -Method POST -Body '{"force": true}' 'http://127.0.0.1:8765/api/quit' -TimeoutSec 3 | Out-Null; Start-Sleep 2 } catch {}
 
 foreach ($folder in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs'))) {
   $lnk = Join-Path $folder 'ZIMaker.lnk'

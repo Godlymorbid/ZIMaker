@@ -6,7 +6,9 @@ Set sh = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 dir = fso.GetParentFolderName(WScript.ScriptFullName)
 wslDir = "/mnt/" & LCase(Left(dir, 1)) & Replace(Mid(dir, 3), "\", "/")
-url = "http://localhost:8765/"
+' 127.0.0.1, not "localhost": Windows tries IPv6 first for localhost, and after WSL restarts its IPv6 forwarding
+' can stay dead for minutes, so reopening after the app had stopped by itself would hang
+url = "http://127.0.0.1:8765/"
 
 ' The WSL distribution the installer chose (none: the default one)
 distro = ""

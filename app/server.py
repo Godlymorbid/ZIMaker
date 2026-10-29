@@ -1,6 +1,6 @@
 """ZIMaker local web app. Start with 'Start ZIMaker.cmd' (Windows) or: python3 -I app/server.py
 
-Serves the UI on http://localhost:8765 and runs one conversion job at a time in a child process.
+Serves the UI on http://127.0.0.1:8765 and runs one conversion job at a time in a child process.
 """
 import hashlib
 import json
@@ -250,6 +250,9 @@ class H(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b)
         elif u.path == "/api/ping":
+            # the launcher checks this just before opening a window, and viewer windows send it to stay open:
+            # either way someone is about to use the app, so don't stop
+            SEEN["t"] = time.time()
             self._json({"ok": True, "started": STARTED})
         elif u.path == "/api/settings":
             from zc import settings
@@ -503,14 +506,14 @@ def main():
     try:
         srv = ThreadingHTTPServer(("127.0.0.1", PORT), H)
     except OSError:
-        print(f"ZIMaker already seems to be running: open http://localhost:{PORT}")
+        print(f"ZIMaker already seems to be running: open http://127.0.0.1:{PORT}")
         return
     SERVER["srv"] = srv
     DEFAULTS["output"] = C.default_output()
     threading.Thread(target=setup_thread, daemon=True).start()
     threading.Thread(target=scheduler, daemon=True).start()
     threading.Thread(target=watchdog, daemon=True).start()
-    print(f"ZIMaker is running at http://localhost:{PORT}", flush=True)
+    print(f"ZIMaker is running at http://127.0.0.1:{PORT}", flush=True)
     srv.serve_forever()
 
 
