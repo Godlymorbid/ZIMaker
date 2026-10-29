@@ -155,7 +155,7 @@ Install them once (about 400 MB in all):
 
 ## Notes
 
-- **Websites:** the crawler follows the site's `robots.txt`. It saves audio and video only when the profile's **website audio and video** option is on. Links to pages that weren't saved (past the page limit, or outside the section) still point at the live site. Sites that build their pages with JavaScript (web apps, infinite scroll) may not come out well.
+- **Websites:** you choose what to save, so a site's `robots.txt` doesn't block it; ZIMaker still waits between pages when the site's `robots.txt` asks it to (Crawl-delay), and slows down when a site says it's busy. It saves audio and video only when the profile's **website audio and video** option is on. Links to pages that weren't saved (past the page limit, or outside the section) still point at the live site. Sites that build their pages with JavaScript (web apps, infinite scroll) may not come out well.
 - **archive.org books:**
   - An item that holds several books (a multi-volume set, for example) gives one volume per book.
   - Borrow-only (lending library) items can't be downloaded; the app says so.

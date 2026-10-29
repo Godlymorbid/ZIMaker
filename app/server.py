@@ -385,8 +385,7 @@ class H(BaseHTTPRequestHandler):
                                               for b in info["books"]]})
                     elif kind == "web":
                         p = web.peek(val)
-                        err = ("This site's robots.txt asks tools like this not to download it" if not p["allowed"]
-                               else "" if p["html"] else "This address isn't a web page")
+                        err = "" if p["html"] else "This address isn't a web page"
                         out.append({"input": line, "kind": "web", "title": p["title"], "error": err})
                     else:
                         out.append({"input": line, "error": val})

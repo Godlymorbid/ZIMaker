@@ -2,7 +2,8 @@
 
 Pages are saved as the site serves them; only links are rewritten. Links to pages that weren't saved
 (beyond the page limit or out of scope) are left pointing at the live site, so the ZIM has no broken
-internal links. Respects robots.txt. Sites that build their pages with JavaScript won't work well.
+internal links. Saving is something the user asks for, so robots.txt doesn't stop it; its Crawl-delay is still
+honoured, to keep crawls polite. Sites that build their pages with JavaScript won't work well.
 """
 import hashlib
 import html
@@ -20,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import common as C
 
-UA = "ZIMaker/1.0 (offline archiving tool; respects robots.txt)"
+UA = "ZIMaker/1.0 (offline archiving tool)"
 HTML_TYPES = ("text/html", "application/xhtml+xml")
 MAX_FILE = 50_000_000          # skip single files bigger than this
 MAX_TOTAL = 4_000_000_000      # stop fetching assets past this many bytes
@@ -132,7 +133,7 @@ class Site:
         self.start_error = None
         self.slowed = False  # the site asked us to slow down at least once
         self.single = scope == "page"  # just the linked page (plus its pictures and styles)
-        self.robots = urllib.robotparser.RobotFileParser()
+        self.robots = urllib.robotparser.RobotFileParser()   # only for its Crawl-delay
         try:
             if offline:  # building from a saved page: no network at all
                 raise RuntimeError
@@ -182,8 +183,7 @@ class Site:
         if self.single:
             return False
         p = urllib.parse.urlsplit(url)
-        return (p.netloc in self.hosts and urllib.parse.unquote(p.path).startswith(self.prefix)
-                and self.robots.can_fetch(UA, url))
+        return p.netloc in self.hosts and urllib.parse.unquote(p.path).startswith(self.prefix)
 
     def _save(self, url, data, mime, title="", kind="asset"):
         """Store a file; returns False if another address already saved the same thing (e.g. /x/ and /x/index.html)."""
@@ -420,7 +420,7 @@ class Site:
 
 
 def peek(url):
-    """Quick look for the 'Check links' button: title and whether robots.txt allows it."""
+    """Quick look for the 'Check links' button: title, and whether it's a web page."""
     s = Site(lambda *_: None, url, 1, "site", "pictures", os.path.join(C.HOME, "peek"))
     try:
         final, mime, charset, data = s._get(s.start, small=True)
@@ -429,7 +429,7 @@ def peek(url):
     text = Site._decode(data, charset)
     t = re.search(r"<title[^>]*>(.*?)</title>", text, re.I | re.S)
     return {"title": " ".join(html.unescape(t.group(1)).split()) if t else s.start,
-            "allowed": s.robots.can_fetch(UA, s.start), "html": mime in HTML_TYPES}
+            "html": mime in HTML_TYPES}
 
 
 def prepare(log, url, opts, mode, vdir):
@@ -438,8 +438,6 @@ def prepare(log, url, opts, mode, vdir):
     site = Site(log, url, max_pages, scope, mode, vdir, include_av=bool(opts.get("media")))
     if site.include_av:
         log("keeping the site's audio and video (formats readers can play, up to 500 MB each)")
-    if not site.robots.can_fetch(UA, site.start):
-        raise RuntimeError("This site's robots.txt asks automated tools not to download it, so ZIMaker won't.")
     log(f"[{site.start}] " + ("saving just this page" if scope == "page" else f"saving up to {max_pages} pages"
                               + (f" under {site.prefix}" if scope == "section" else "")))
     n = site.crawl()
