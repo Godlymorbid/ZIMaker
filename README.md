@@ -13,13 +13,14 @@ Turns websites, archive.org books, ebooks, documents, emails, pictures, audio an
 
 The installer:
 
-- checks for WSL (Windows Subsystem for Linux), and offers to install it with Ubuntu if it's missing;
+- checks for WSL (Windows Subsystem for Linux), and offers to turn it on if it's off;
+- checks for a Linux distribution, and offers to install Ubuntu for your account if there isn't one;
 - checks for Python 3.9 or newer inside WSL;
 - installs ZIMaker for the current Windows user in `%LOCALAPPDATA%\Programs\ZIMaker` (no administrator rights needed);
 - downloads the libraries it needs, about 150 MB;
 - adds a **ZIMaker** icon to the desktop and to the Start menu.
 
-Installing WSL needs administrator approval and a restart. After the restart, open **Ubuntu** from the Start menu once to finish its setup, then run the installer again.
+Turning on WSL needs administrator approval and a restart. After the restart, run the installer again: it installs Ubuntu (no administrator needed) and asks you to pick a Linux username and password. When you see the Linux prompt, type `exit` and the installer carries on.
 
 ZIMaker updates itself (see **Updates** below). You can also update by running a newer copy's installer over the old one; that also replaces an older install called "ZIM Creator", keeping its job history. To remove ZIMaker, run `Uninstall ZIMaker.cmd` in the install folder. Uninstalling never touches the ZIM files you made.
 

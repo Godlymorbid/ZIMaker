@@ -15,22 +15,52 @@ function Ask($q) { if ($Quiet) { return $true }; $a = Read-Host "$q [Y/n]"; retu
 Write-Host "ZIMaker installer" -ForegroundColor Yellow
 Write-Host "Turns websites, archive.org books, ebooks, documents and pictures into ZIM files for Kiwix."
 
-# 1. WSL with a Linux distribution
+# 1. WSL with a Linux distribution. Two separate steps, because they need different rights:
+#    turning WSL on needs an administrator (and a restart); Ubuntu must be installed as *this* user,
+#    since WSL distributions belong to the Windows account that installs them.
 Step "Checking WSL (Windows Subsystem for Linux)"
-$ok = $false
-try { $out = & wsl.exe -e sh -c "echo zc-ok" 2>$null; $ok = (($out -join '') -match 'zc-ok') } catch {}
-if (-not $ok) {
-  Write-Host "ZIMaker runs its converter in WSL, which isn't set up on this PC yet."
-  if (Ask "Install WSL with Ubuntu now? (needs administrator approval, then a restart)") {
-    try { Start-Process wsl.exe -ArgumentList '--install', '-d', 'Ubuntu' -Verb RunAs -Wait } catch { Fail "WSL install was cancelled or failed: $_" }
-    Write-Host ""
-    Write-Host "Next:" -ForegroundColor Yellow
-    Write-Host " 1. Restart the PC."
-    Write-Host " 2. Open 'Ubuntu' from the Start menu once and pick a username and password."
-    Write-Host " 3. Run 'Install ZIMaker' again."
-    exit 2
+$env:WSL_UTF8 = '1'   # plain text from wsl.exe instead of UTF-16
+function Linux-Works { try { $o = & wsl.exe -e sh -c "echo zc-ok" 2>$null; return (($o -join '') -match 'zc-ok') } catch { return $false } }
+function Wsl-On { try { & wsl.exe --status *> $null; return ($LASTEXITCODE -eq 0) } catch { return $false } }
+
+if (-not (Linux-Works)) {
+  if (-not (Wsl-On)) {
+    Write-Host "ZIMaker runs its converter in WSL, which isn't turned on on this PC yet."
+    if (-not (Ask "Turn on WSL now? (needs administrator approval, then a restart)")) {
+      Fail "WSL is required. You can turn it on later with:  wsl --install"
+    }
+    # Turn on WSL only (no distribution: one installed from an administrator window would belong to the
+    # administrator). Older Windows versions don't know --no-distribution; turn the features on directly then.
+    $elevated = 'wsl.exe --install --no-distribution; $c = $LASTEXITCODE; if ($c -ne 0 -and $c -ne 3010) { ' +
+                'dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart; ' +
+                'dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart }'
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($elevated))
+    try { Start-Process powershell.exe -ArgumentList '-NoProfile', '-EncodedCommand', $enc -Verb RunAs -Wait }
+    catch { Fail "Turning on WSL was cancelled or failed: $_" }
+    if (-not (Wsl-On)) {
+      Write-Host ""
+      Write-Host "Next:" -ForegroundColor Yellow
+      Write-Host " 1. Restart the PC."
+      Write-Host " 2. Run 'Install ZIMaker' again. It installs Ubuntu and then ZIMaker."
+      exit 2
+    }
   }
-  Fail "WSL is required. You can install it later with:  wsl --install -d Ubuntu"
+
+  # WSL is on but has no working Linux: install Ubuntu for this user, right here in this window.
+  Write-Host "WSL is on, but there's no Linux installed for your account yet."
+  if (-not (Ask "Install Ubuntu now? (about 500 MB download, no administrator needed)")) {
+    Fail "ZIMaker needs a Linux distribution in WSL. You can install one later with:  wsl --install -d Ubuntu"
+  }
+  Write-Host "Installing Ubuntu. When it asks, pick a username and password for Linux (they don't have to match Windows)."
+  Write-Host "When you see a Linux prompt (ending in `$), type  exit  and press Enter to continue." -ForegroundColor Yellow
+  & wsl.exe --install -d Ubuntu --web-download
+  if ($LASTEXITCODE -ne 0) { & wsl.exe --install -d Ubuntu }   # older WSL without --web-download
+  & wsl.exe --set-default Ubuntu *> $null
+  if (-not (Linux-Works)) {
+    Fail ("Ubuntu didn't finish installing.`n" +
+          "Open PowerShell and run:  wsl --install -d Ubuntu`n" +
+          "pick a Linux username and password, then run 'Install ZIMaker' again.")
+  }
 }
 Write-Host "WSL is ready."
 
