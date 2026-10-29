@@ -34,7 +34,9 @@ input[type=color]{width:40px;height:30px;border:1px solid var(--line);border-rad
 .tool{display:flex;gap:8px;align-items:baseline;padding:3px 0}
 .cmd{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
 .cmd code{flex:1;font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 9px;overflow-wrap:anywhere}
-.lib li{align-items:center}
+.lib li{align-items:center;flex-wrap:wrap}
+.lib li > span:first-child{flex:1 1 260px}               /* the title and path take what's left, wrapping long paths */
+.lib li > span:last-child{flex-shrink:0;margin-left:auto} /* the buttons keep their size (on a narrow window: below) */
 .proxy-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;margin-top:8px}
 .proxy-grid label{font-size:14px}
 @media (max-width:560px){.proxy-grid{grid-template-columns:1fr}}
