@@ -32,8 +32,11 @@ def default_profile():
 
 
 def defaults():
-    return {"theme": "system", "accent": "", "check_updates": True, "active": "Default",
-            "profiles": {"Default": default_profile()}}
+    return {"theme": "system", "accent": "", "check_updates": True,
+            "proxy": C.clean_proxy({}),   # every download goes through it (see common.net_init)
+            "private": False,             # keep no job history or list of opened ZIMs
+            "neutral_names": False,       # name new ZIM files zim-<date>-<n>.zim instead of after their title
+            "active": "Default", "profiles": {"Default": default_profile()}}
 
 
 def clean_profile(p):
@@ -63,7 +66,9 @@ def clean(s):
     accent = str(s.get("accent") or "")
     out = {"theme": s.get("theme") if s.get("theme") in ("system", "light", "dark") else d["theme"],
            "accent": accent.lower() if re.fullmatch(r"#[0-9a-fA-F]{6}", accent) else "",  # "" = ZIMaker red
-           "check_updates": bool(s.get("check_updates", True))}
+           "check_updates": bool(s.get("check_updates", True)),
+           "proxy": C.clean_proxy(s.get("proxy")),
+           "private": bool(s.get("private")), "neutral_names": bool(s.get("neutral_names"))}
     profiles = {}
     for name, p in (s.get("profiles") or {}).items():
         name = " ".join(str(name).split())[:40]
@@ -87,9 +92,10 @@ def save(s):
     s = clean(s)
     os.makedirs(C.HOME, exist_ok=True)
     tmp = PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(s, f, indent=1)
+    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as f:
+        json.dump(s, f, indent=1)   # owner-only: it can hold a proxy password
     os.replace(tmp, PATH)
+    C.net_init(s["proxy"])          # this process uses the new proxy straight away
     return s
 
 

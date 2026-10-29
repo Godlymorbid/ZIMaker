@@ -35,6 +35,9 @@ input[type=color]{width:40px;height:30px;border:1px solid var(--line);border-rad
 .cmd{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
 .cmd code{flex:1;font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 9px;overflow-wrap:anywhere}
 .lib li{align-items:center}
+.proxy-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;margin-top:8px}
+.proxy-grid label{font-size:14px}
+@media (max-width:560px){.proxy-grid{grid-template-columns:1fr}}
 .job, .items li, pre, .err, .hint{overflow-wrap:anywhere}  /* long web addresses must wrap, not widen the page */
 .items li > span{min-width:0}
 *{box-sizing:border-box}
@@ -44,7 +47,7 @@ h1{font-size:24px;margin:8px 0 4px}
 .sub{color:var(--mute);margin:0 0 18px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:14px 0}
 .card h2{font-size:16px;margin:0 0 10px}
-textarea,input[type=text]{width:100%;font:inherit;color:inherit;background:transparent;border:1px solid var(--line);border-radius:6px;padding:8px}
+textarea,input[type=text],input[type=password]{width:100%;font:inherit;color:inherit;background:transparent;border:1px solid var(--line);border-radius:6px;padding:8px}
 textarea{min-height:80px;resize:vertical}
 button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:6px;padding:7px 14px;cursor:pointer}
 button.primary{background:var(--acc);border-color:var(--acc);color:var(--on-acc);font-weight:600;padding:10px 22px}
@@ -146,6 +149,43 @@ body.dragging #drop{display:flex}
     <option value="fewer">Fewer false alarms (only clear pictures)</option>
   </select>
 
+  <h3>Connection and privacy</h3>
+  <div><b>Proxy</b></div>
+  <div class="hint">Send all of ZIMaker's downloads through a proxy, such as Tor, Psiphon or another proxy you trust. With one set, ZIMaker never connects directly: if the proxy isn't running, downloads fail instead of going around it. A VPN running on your computer needs no setting here.</div>
+  <div class="row">
+    <select id="s-ptype" aria-label="Proxy type">
+      <option value="off">No proxy</option>
+      <option value="socks5">SOCKS5 proxy (Tor, Psiphon, …)</option>
+      <option value="http">HTTP proxy</option>
+    </select>
+    <button id="p-tor" title="SOCKS5 at 127.0.0.1:9150 (Tor Browser must be open)">Tor Browser</button>
+    <button id="p-torsvc" title="SOCKS5 at 127.0.0.1:9050 (Tor running as a service)">Tor service</button>
+  </div>
+  <div id="proxyfields">
+    <div class="proxy-grid">
+      <label>Address <input type="text" id="s-phost" placeholder="127.0.0.1" autocomplete="off"></label>
+      <label>Port <input type="text" id="s-pport" placeholder="9150" inputmode="numeric" autocomplete="off"></label>
+      <label>Username <span class="hint">(only if the proxy needs one)</span> <input type="text" id="s-puser" autocomplete="off"></label>
+      <label>Password <input type="password" id="s-ppass" autocomplete="new-password"></label>
+    </div>
+    <div class="hint" style="margin-top:4px">Psiphon shows its SOCKS port in its settings (you can set a fixed one there).</div>
+  </div>
+  <div class="row"><button id="p-test">Test connection</button><span id="p-testmsg" class="hint" aria-live="polite"></span></div>
+  <div id="p-wslhint" class="hint" style="display:none;margin-top:6px">
+    Tor Browser and Psiphon listen on Windows' own address (127.0.0.1), which ZIMaker can't reach in WSL's default
+    network mode. To fix this once (Windows 11 22H2 or newer): in your Windows user folder (C:\Users\<i>you</i>), create a
+    text file named <code>.wslconfig</code> containing the two lines <code>[wsl2]</code> and <code>networkingMode=mirrored</code>,
+    then run <code>wsl --shutdown</code> in PowerShell (this stops all Linux programs in WSL) and open ZIMaker again.
+    Or run the proxy inside WSL instead: Tor's service (<code>sudo apt install tor</code>) listens on 127.0.0.1:9050.
+  </div>
+
+  <div style="margin-top:14px"><b>Privacy</b></div>
+  <label class="opt"><input type="checkbox" id="s-private"> Private mode: keep no history
+    <small>The Jobs list (with logs and web addresses), uploaded copies and the list of ZIMs you opened are deleted when ZIMaker stops, and opened ZIMs aren't remembered at all. The viewer keeps titles out of the browser's history. The ZIM files you make stay where you saved them.</small></label>
+  <label class="opt"><input type="checkbox" id="s-neutral"> Neutral file names
+    <small>Name new ZIM files like zim-20261029-1.zim instead of after their title. The title and pages inside still say what the file is, so keep sensitive files in an encrypted folder (see the README).</small></label>
+  <div class="row"><button id="clearhist">Clear history now</button><span id="clearmsg" class="hint" aria-live="polite"></span></div>
+
   <h3>Optional tools</h3>
   <div class="hint">Some file types need an extra program. They come from Ubuntu's own software collection; install them once with the command below.</div>
   <div id="toollist" style="margin-top:6px"></div>
@@ -231,6 +271,7 @@ body.dragging #drop{display:flex}
 
   <div class="card">
     <h2>Jobs</h2>
+    <div class="hint" id="privnote" style="display:none;margin:-6px 0 6px">Private mode is on: this list and the jobs' logs are deleted when ZIMaker stops.</div>
     <div id="jobs"><p class="hint">Nothing yet.</p></div>
   </div>
 
@@ -335,7 +376,8 @@ async function openZim(path) {
   try {
     const z = await api("/api/zim/open", {method: "POST", body: JSON.stringify({path})});
     $("#zimmsg").textContent = "";
-    window.open(`/viewer?z=${z.id}&t=${encodeURIComponent(z.title)}`, "_blank", "width=1150,height=900");
+    // no title in the address: the browser remembers addresses (the viewer asks ZIMaker for the title)
+    window.open(`/viewer?z=${z.id}`, "_blank", "width=1150,height=900");
     loadLibrary();
   } catch (e) { $("#zimmsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
 }
@@ -397,6 +439,42 @@ async function loadTools() {
   if (missing) $("#copycmd").onclick = () => navigator.clipboard.writeText(t.command).then(() => { $("#copycmd").textContent = "Copied"; });
 }
 
+// ---- connection and privacy: proxy, private mode, neutral file names
+function showProxy(p) {
+  $("#s-ptype").value = p.type; $("#s-phost").value = p.host; $("#s-pport").value = p.port || "";
+  $("#s-puser").value = p.user; $("#s-ppass").value = p.password;
+  $("#proxyfields").style.display = p.type === "off" ? "none" : "block";
+}
+function readProxy() {
+  return {type: $("#s-ptype").value, host: $("#s-phost").value.trim(), port: parseInt($("#s-pport").value, 10) || 0,
+          user: $("#s-puser").value, password: $("#s-ppass").value};
+}
+$("#s-ptype").onchange = () => { const p = readProxy(); if (p.type !== "off" && !p.host) p.host = "127.0.0.1"; showProxy(p); $("#p-testmsg").textContent = ""; };
+$("#p-tor").onclick = () => { showProxy({type: "socks5", host: "127.0.0.1", port: 9150, user: "", password: ""}); $("#p-testmsg").textContent = ""; };
+$("#p-torsvc").onclick = () => { showProxy({type: "socks5", host: "127.0.0.1", port: 9050, user: "", password: ""}); $("#p-testmsg").textContent = ""; };
+$("#p-test").onclick = async () => {
+  const p = readProxy();
+  $("#p-wslhint").style.display = "none";
+  $("#p-testmsg").textContent = p.type === "off" ? "Testing a direct connection…" : "Testing (through Tor this can take a while)…";
+  $("#p-test").disabled = true;
+  const r = await api("/api/proxy/test", {method: "POST", body: JSON.stringify({proxy: p})}).catch(e => ({error: e.message}));
+  $("#p-test").disabled = false;
+  if (r.ok) {
+    $("#p-testmsg").innerHTML = `<span class="good">Working.</span> Websites see the address ${esc(r.ip)}`
+      + (r.tor ? " (a Tor exit, so they can't tell where you are)" : p.type === "off" ? " (your own connection)" : "")
+      + ` · ${r.seconds} s`;
+  } else {
+    $("#p-testmsg").innerHTML = `<span class="err">Not working: ${esc(r.error || "unknown error")}</span>`;
+    if (r.wsl_hint) $("#p-wslhint").style.display = "block";
+  }
+};
+$("#clearhist").onclick = async () => {
+  if (!confirm("Delete the Jobs list (with logs and web addresses), uploaded copies and the list of opened ZIMs?\n\nThe ZIM files you made are not deleted. Jobs still running are kept.")) return;
+  const r = await api("/api/history/clear", {method: "POST", body: "{}"}).catch(e => ({error: e.message}));
+  $("#clearmsg").innerHTML = r.error ? `<span class="err">${esc(r.error)}</span>` : `<span class="good">Cleared${r.removed ? ` (${r.removed} job${r.removed === 1 ? "" : "s"})` : ""}.</span>`;
+  poll(); loadLibrary();
+};
+
 // ---- settings: theme, update checks, profiles
 let settings = null, draft = null, editing = null, defaultOutput = "";
 const radio = (name, v) => { const el = document.querySelector(`input[name="${name}"][value="${v}"]`); if (el) el.checked = true; };
@@ -421,11 +499,13 @@ async function loadSettings() {
   settings = await api("/api/settings");
   setTheme(settings.theme);
   setAccent(settings.accent);
+  $("#privnote").style.display = settings.private ? "block" : "none";
   fillProfileSelect($("#profile"), Object.keys(settings.profiles), settings.active);
   applyProfile(settings.active);
 }
 async function saveSettings(s) {
   settings = await api("/api/settings", {method: "POST", body: JSON.stringify(s)});
+  $("#privnote").style.display = settings.private ? "block" : "none";
   return settings;
 }
 $("#profile").onchange = async () => {
@@ -474,9 +554,13 @@ $("#opensettings").onclick = () => {
   markSwatch(draft.accent);
   loadTools();
   $("#s-updates").checked = draft.check_updates;
+  showProxy(draft.proxy);
+  $("#s-private").checked = draft.private;
+  $("#s-neutral").checked = draft.neutral_names;
   showDraftProfile();
   $("#settingsmsg").textContent = "";
   $("#s-updmsg").textContent = "";
+  $("#p-testmsg").textContent = ""; $("#p-wslhint").style.display = "none"; $("#clearmsg").textContent = "";
   $("#settings").style.display = "block";
 };
 document.querySelectorAll("input[name=theme]").forEach(r => r.onchange = () => { draft.theme = r.value; setTheme(r.value); });
@@ -513,6 +597,13 @@ $("#p-del").onclick = () => {
 $("#savesettings").onclick = async () => {
   readDraftProfile();
   draft.check_updates = $("#s-updates").checked;
+  draft.proxy = readProxy();
+  draft.private = $("#s-private").checked;
+  draft.neutral_names = $("#s-neutral").checked;
+  if (draft.proxy.type !== "off" && (!draft.proxy.host || !draft.proxy.port)) {
+    $("#settingsmsg").innerHTML = '<span class="err">Enter the proxy\'s address and port (or choose No proxy).</span>';
+    return;
+  }
   try {
     await saveSettings(draft);
     setTheme(settings.theme);

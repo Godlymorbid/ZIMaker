@@ -61,7 +61,14 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;
 const params = new URLSearchParams(location.search);
 const zid = params.get("z"), frame = $("#frame");
 const zurl = p => `/zim/${zid}/` + (p ? p.split("/").map(encodeURIComponent).join("/") : "");
-if (params.get("t")) { $("#title").textContent = params.get("t"); document.title = params.get("t") + " — ZIM viewer"; }
+// The title comes from ZIMaker, not the address (the browser remembers addresses). In private mode the window title
+// stays plain too, so the browser's history doesn't list what was read.
+let privateMode = true;
+if (zid) fetch(`/api/zim/${zid}/info`, {cache: "no-store"}).then(r => r.json()).then(i => {
+  privateMode = !!i.private;
+  if (i.title) $("#title").textContent = i.title;
+  if (i.title && !privateMode) document.title = i.title + " — ZIM viewer";
+}).catch(() => {});
 
 function show(path) { $("#results").style.display = "none"; $("#sugg").style.display = "none"; frame.src = zurl(path); }
 if (!zid) { $("#msg").style.display = "block"; $("#msg").innerHTML = "<p>Open a ZIM file from ZIMaker's main window.</p>"; frame.style.display = "none"; }
@@ -73,7 +80,7 @@ $("#fwd").onclick = () => { try { frame.contentWindow.history.forward(); } catch
 frame.onload = () => {
   try {
     const t = frame.contentDocument.title;
-    if (t) document.title = t + " — " + ($("#title").textContent || "ZIM viewer");
+    if (t && !privateMode) document.title = t + " — " + ($("#title").textContent || "ZIM viewer");
     if (frame.contentDocument.body && /isn't open any more/.test(frame.contentDocument.body.innerText))
       frame.contentDocument.body.innerHTML = '<p style="font-family:sans-serif;padding:30px">This ZIM was closed (ZIMaker restarted). Open it again from ZIMaker\'s main window.</p>';
   } catch (e) {}

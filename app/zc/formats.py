@@ -126,7 +126,7 @@ def _pandoc(log, path, name, fmt, mode, vdir):
     cmd = [exe, path, "-f", fmt, "-t", "epub3", "-o", out, "--toc", "--toc-depth=2", "--split-level=2",
            f"--metadata-file={meta}", f"--resource-path={os.path.dirname(path)}"]
     log(f"[{name}] converting with Pandoc ({fmt})")
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, env=C.proxy_env())  # linked pictures: via the proxy
     if r.returncode != 0 or not os.path.exists(out):
         raise RuntimeError("Pandoc couldn't convert this file: " + (r.stderr.strip().splitlines() or ["unknown error"])[-1])
     vol = epub.prepare(log, out, mode, vdir, name)
@@ -145,7 +145,7 @@ def _office(log, path, name, mode, vdir):
     log(f"[{name}] converting with LibreOffice")
     r = subprocess.run([soffice, f"-env:UserInstallation=file://{os.path.join(vdir, 'lo-profile')}", "--headless",
                         "--convert-to", target, "--outdir", out_dir, path],
-                       capture_output=True, text=True, timeout=1800)
+                       capture_output=True, text=True, timeout=1800, env=C.proxy_env())
     made = [f for f in os.listdir(out_dir) if f.lower().endswith("." + target)]
     if not made:
         raise RuntimeError("LibreOffice couldn't convert this file: "

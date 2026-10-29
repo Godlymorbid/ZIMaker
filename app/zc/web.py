@@ -61,6 +61,12 @@ def explain(e):
             return "The site is limiting requests right now. Try again later."
         return f"The site returned an error (HTTP {e.code} {e.reason})."
     if isinstance(e, (urllib.error.URLError, TimeoutError, OSError)):
+        why = str(getattr(e, "reason", "") or e)
+        if C.PROXY:
+            if "proxy" in why.lower():  # our own messages: the proxy isn't usable, or it couldn't reach the site
+                return why[0].upper() + why[1:] + "."
+            return (f"Couldn't reach this website through the proxy ({C.PROXY['host']}:{C.PROXY['port']}). "
+                    "Check that the proxy is running, and use Test connection in ⚙ Settings → Connection and privacy.")
         return "Couldn't reach this website. It may be down, or the address may be wrong."
     return str(e)
 

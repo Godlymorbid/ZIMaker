@@ -1,16 +1,20 @@
 """Shared helpers: paths, logging/progress, downloads, text cleanup, filenames."""
 import functools
 import html
+import http.client
 import json
 import ntpath
 import os
 import re
 import shutil
+import socket
+import struct
 import subprocess
 import sys
 import time
 import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 
 HOME = os.path.expanduser("~/.zimaker")
@@ -54,6 +58,179 @@ class Log:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"status": status, "stage": text, "done": done, "total": total, "t": time.time()}, f)
         os.replace(tmp, os.path.join(self.dir, "state.json"))
+
+
+# ---------------------------------------------------------------- proxy
+# Every download (websites, archive.org, libraries, updates) goes through the proxy chosen in Settings, if any.
+# With a proxy chosen, nothing connects directly: if the proxy is down or misconfigured, downloads fail instead
+# of quietly going around it. Names are looked up by the proxy too (SOCKS: remote DNS; curl: socks5h).
+PROXY = {}  # the proxy in use: {"type": "http" | "socks5", "host", "port", "user", "password"}; empty = none
+
+
+def clean_proxy(p):
+    p = p if isinstance(p, dict) else {}
+    try:
+        port = int(p.get("port") or 0)
+    except (TypeError, ValueError):
+        port = 0
+    return {"type": p.get("type") if p.get("type") in ("off", "http", "socks5") else "off",
+            "host": str(p.get("host") or "").strip()[:255], "port": port if 0 < port < 65536 else 0,
+            "user": str(p.get("user") or "")[:255], "password": str(p.get("password") or "")[:255]}
+
+
+def _proxy_problem(p):
+    if not re.fullmatch(r"[A-Za-z0-9.\-]+|\[[0-9A-Fa-f:.]+\]", p["host"]):
+        return "its address is missing or not valid"
+    if not p["port"]:
+        return "its port is missing"
+    return None
+
+
+def _recv(s, n):
+    b = b""
+    while len(b) < n:
+        chunk = s.recv(n - len(b))
+        if not chunk:
+            raise OSError("the SOCKS proxy closed the connection")
+        b += chunk
+    return b
+
+
+def _socks_connect(p, host, port, timeout):
+    """A connection to host:port through a SOCKS5 proxy. The proxy looks up the name, so no DNS leaks."""
+    s = socket.create_connection((p["host"].strip("[]"), p["port"]), timeout)
+    try:
+        login = bool(p["user"])
+        s.sendall(b"\x05\x01" + (b"\x02" if login else b"\x00"))
+        method = _recv(s, 2)[1]
+        if method == 2 and login:
+            u, pw = p["user"].encode()[:255], p["password"].encode()[:255]
+            s.sendall(b"\x01" + bytes([len(u)]) + u + bytes([len(pw)]) + pw)
+            if _recv(s, 2)[1] != 0:
+                raise OSError("the SOCKS proxy didn't accept the username or password")
+        elif method != 0:
+            raise OSError("the SOCKS proxy wants a login (set a username and password in Settings)")
+        name = host.strip("[]").encode("idna")
+        s.sendall(b"\x05\x01\x00\x03" + bytes([len(name)]) + name + struct.pack(">H", port))
+        reply = _recv(s, 4)
+        if reply[1] != 0:
+            why = {2: "not allowed by the proxy", 3: "network unreachable", 4: "host unreachable",
+                   5: "connection refused", 6: "timed out"}.get(reply[1], f"SOCKS error {reply[1]}")
+            raise OSError(f"the proxy couldn't reach {host} ({why})")
+        _recv(s, {1: 4, 4: 16}.get(reply[3]) or _recv(s, 1)[0])  # the address the proxy bound: not needed
+        _recv(s, 2)
+        return s
+    except BaseException:
+        s.close()
+        raise
+
+
+class _SocksHTTP(http.client.HTTPConnection):
+    def __init__(self, *a, proxy, **kw):
+        super().__init__(*a, **kw)
+        self.proxy = proxy
+
+    def connect(self):
+        self.sock = _socks_connect(self.proxy, self.host, self.port, self.timeout)
+
+
+class _SocksHTTPS(http.client.HTTPSConnection):
+    def __init__(self, *a, proxy, **kw):
+        super().__init__(*a, **kw)
+        self.proxy = proxy
+
+    def connect(self):
+        sock = _socks_connect(self.proxy, self.host, self.port, self.timeout)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+class _SocksHandler(urllib.request.HTTPHandler):
+    def __init__(self, proxy):
+        super().__init__()
+        self.proxy = proxy
+
+    def http_open(self, req):
+        return self.do_open(lambda host, **kw: _SocksHTTP(host, proxy=self.proxy, **kw), req)
+
+
+class _SocksHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, proxy):
+        super().__init__()
+        self.proxy = proxy
+
+    def https_open(self, req):
+        return self.do_open(lambda host, **kw: _SocksHTTPS(host, proxy=self.proxy, **kw), req, context=self._context)
+
+
+class _Refuse(urllib.request.BaseHandler):
+    """Runs before the normal handlers: refuses what would otherwise connect directly despite the proxy."""
+    handler_order = 100
+
+    def __init__(self, why=None):
+        self.why = why
+
+    def _refuse(self, req):
+        raise urllib.error.URLError(f"the proxy can't be used: {self.why or 'it only carries web addresses'}. "
+                                    "Check ⚙ Settings → Connection and privacy")
+
+    def ftp_open(self, req):
+        return self._refuse(req)
+
+    def http_open(self, req):
+        return self._refuse(req) if self.why else None
+
+    https_open = http_open
+
+
+def proxy_opener(p):
+    """A urllib opener that sends everything through proxy p (and nothing around it)."""
+    if p["type"] == "off":
+        return urllib.request.build_opener()
+    why = _proxy_problem(p)
+    if why:
+        return urllib.request.build_opener(_Refuse(why))
+    if p["type"] == "http":
+        login = (urllib.parse.quote(p["user"], safe="") + ":" + urllib.parse.quote(p["password"], safe="") + "@"
+                 if p["user"] else "")
+        url = f"http://{login}{p['host']}:{p['port']}"
+        return urllib.request.build_opener(urllib.request.ProxyHandler({"http": url, "https": url}), _Refuse())
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), _SocksHandler(p), _SocksHTTPSHandler(p),
+                                       _Refuse())
+
+
+def net_init(p=None):
+    """Use the proxy from settings.json (or p) for every download this process makes."""
+    if p is None:
+        try:
+            p = json.load(open(os.path.join(HOME, "settings.json"), encoding="utf-8")).get("proxy")
+        except (OSError, ValueError, AttributeError):
+            p = None
+    p = clean_proxy(p)
+    PROXY.clear()
+    if p["type"] != "off":
+        PROXY.update(p)
+        os.environ.pop("no_proxy", None), os.environ.pop("NO_PROXY", None)  # urllib would go around the proxy for these
+    urllib.request.install_opener(proxy_opener(p))
+
+
+def _proxy_url():
+    scheme = "socks5h" if PROXY["type"] == "socks5" else "http"
+    login = (urllib.parse.quote(PROXY["user"], safe="") + ":" + urllib.parse.quote(PROXY["password"], safe="") + "@"
+             if PROXY["user"] else "")
+    return f"{scheme}://{login}{PROXY['host']}:{PROXY['port']}"
+
+
+def proxy_env():
+    """Environment for helper programs (Pandoc, LibreOffice) that may fetch pictures a document links to:
+    the proxy, if one is set (None: the normal environment)."""
+    if not PROXY:
+        return None
+    env = dict(os.environ)
+    url = _proxy_url() if not _proxy_problem(PROXY) else "http://127.0.0.1:9"  # unusable proxy: fetch nothing
+    for k in ("http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        env[k] = url
+    env.pop("no_proxy", None), env.pop("NO_PROXY", None)
+    return env
 
 
 # ---------------------------------------------------------------- network
@@ -100,12 +277,16 @@ def download(url, dest, log=None, label="", size=0):
     """Resumable download (curl if available); a .ok marker records completion."""
     if os.path.exists(dest + ".ok"):
         return dest
+    if PROXY and _proxy_problem(PROXY):
+        raise RuntimeError(f"The proxy can't be used: {_proxy_problem(PROXY)}. Check ⚙ Settings → Connection and privacy.")
     if not shutil.which("curl"):
         _download_py(url, dest, log, label, size)
         open(dest + ".ok", "w").close()
         return dest
     for attempt in (1, 2):
         cmd = ["curl", "-sSL", "--fail", "--retry", "8", "--retry-delay", "10", "-C", "-", "-o", dest, url]
+        if PROXY:  # same proxy as everything else; socks5h: the proxy looks up names
+            cmd[1:1] = ["--proxy", _proxy_url()]
         p = subprocess.Popen(cmd)
         last = 0
         while p.poll() is None:
@@ -249,3 +430,6 @@ def windows_profile():
     except Exception:
         pass
     return ""
+
+
+net_init()  # every process (server, jobs, setup) starts with the proxy chosen in Settings

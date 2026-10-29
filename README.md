@@ -66,6 +66,7 @@ Click **⚙ Settings** in the top corner.
   - **website audio and video:** off by default; when on, playable audio and video on the site (up to 500 MB each) are saved too
   - **image quality:** smaller files (1400 px), balanced (1800 px) or sharper (2400 px). It also sets video quality: 480p, 720p or 1080p
   - **picture detection:** catch more pictures, balanced, or fewer false alarms
+- **Connection and privacy:** a proxy for all downloads, private mode, neutral file names and **Clear history now** (see **Privacy and censorship** below).
 
 On the main screen, pick a profile from **Profile** to fill in all the options at once. You can still change options for a single job, or click **Save options to profile** to keep them. Settings are stored in `~/.zimaker/settings.json`, so they survive updates and reinstalls.
 
@@ -156,6 +157,66 @@ Install them once (about 400 MB in all):
 - **Linux** (Debian/Ubuntu): `sudo apt install ffmpeg 7zip unar libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui libreoffice-draw-nogui`
 
 **⚙ Settings → Optional tools** shows which are installed and the exact command for your system. If you add a file that needs a missing tool, the job says which one and how to install it.
+
+## Privacy and censorship
+
+ZIMaker can help where websites are blocked or reading them is risky: download once, then read offline, with no repeated visits that could be noticed. But no tool makes this safe on its own. In many places the bigger danger is someone finding the files on a phone or computer, not the download. If you're at real risk, get advice for your own country first. Access Now's free [Digital Security Helpline](https://www.accessnow.org/help/) helps activists, journalists and others at risk.
+
+### Getting past blocks: a proxy
+
+**⚙ Settings → Connection and privacy → Proxy** sends *all* of ZIMaker's downloads through a proxy: websites, archive.org, its own libraries and updates. Pictures that documents link to (via Pandoc or LibreOffice) go through it too.
+
+- **Tor Browser:** start Tor Browser and leave it open, then click **Tor Browser** (SOCKS5, 127.0.0.1:9150).
+- **Tor as a service:** click **Tor service** (127.0.0.1:9050).
+- **Psiphon:** choose SOCKS5 and enter the SOCKS port that Psiphon's settings show. Set a fixed port there, so it doesn't change.
+- **Any other SOCKS5 or HTTP proxy:** enter its address, its port, and a login if it needs one. The password is stored in ZIMaker's settings file, which only your account can read.
+- **A VPN** running on your computer covers ZIMaker already, so leave the setting on **No proxy**.
+
+Click **Test connection** to see the address websites will see. Through Tor, it also says it's a Tor exit.
+
+Two rules, on purpose:
+
+- **Fail closed:** with a proxy set, ZIMaker never connects directly. If the proxy stops, downloads fail with a message instead of quietly going around it.
+- **No DNS leaks:** with SOCKS5, the proxy looks up website names, so your local network never sees which sites you asked for.
+
+**Windows: Tor Browser or Psiphon can't be reached?** They listen on Windows' own address (127.0.0.1), and ZIMaker runs in WSL, which can't reach that address in its default network mode. To fix it once (Windows 11 22H2 or newer):
+
+1. In your Windows user folder (`C:\Users\you`), create a text file named `.wslconfig` containing:
+   ```
+   [wsl2]
+   networkingMode=mirrored
+   ```
+2. Run `wsl --shutdown` in PowerShell. This stops all Linux programs in WSL.
+3. Open ZIMaker again.
+
+Or run Tor inside WSL instead (`sudo apt install tor`), and use **Tor service**. Where Tor itself is blocked, Tor Browser's built-in bridges (Snowflake, obfs4) or Psiphon usually still get through.
+
+Using Tor or a VPN is itself illegal or watched in some countries, and a well-equipped state can often tell that you're using one, even when it can't see what you're reading.
+
+### Leaving fewer traces
+
+- **Private mode** (Settings): ZIMaker deletes the Jobs list, with its logs and the web addresses you saved, when it stops. It deletes uploaded copies too, and doesn't remember which ZIMs you opened. **Clear history now** does the same at any time. Jobs that are still running are kept.
+- **Neutral file names** (Settings): new ZIMs are saved as `zim-20261029-1.zim` instead of after their title.
+- **The viewer:**
+  - It never puts a ZIM's title in its address. In private mode, the window title stays "ZIM viewer" too, so your browser's history doesn't list what you read.
+  - ZIM pages can't load anything from the internet. A remote picture would tell the network what you're reading.
+  - Nothing ZIMaker shows is kept in the browser's cache.
+
+What these settings **don't** hide:
+
+- **Inside a ZIM file:** its title, description and every page still say what it is, whatever the file is called.
+- **Outside ZIMaker:** Windows' "Recent files", Kiwix's own history and bookmarks, backups and cloud sync (OneDrive, Google Drive) can all record or copy your files.
+
+### Keeping files safe: encrypt them
+
+The strongest protection is to keep your ZIMs in an encrypted place that only opens with your password. Then set ZIMaker's **Save to folder** to that place.
+
+- **[VeraCrypt](https://veracrypt.io)** (free; Windows, Linux, macOS): creates an encrypted "container" file that opens as a drive. Close it (Dismount) when you're done.
+- **BitLocker** (Windows Pro): can encrypt a USB stick or a whole drive.
+- **Linux:** encrypt the disk when installing (LUKS), or use VeraCrypt.
+- **Phones:** a phone's built-in encryption protects it only while it's locked. Use a strong passcode, not a pattern or 4-digit PIN.
+
+An encrypted container doesn't help while it's open, and some places force people to unlock their devices. For sharing, ZIMs work well on SD cards and USB sticks, which are easy to hide or wipe, and Kiwix reads them offline on phones and computers.
 
 ## Notes
 

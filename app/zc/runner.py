@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import sys
+import time
 import traceback
 from collections import Counter
 
@@ -147,7 +148,13 @@ def main(job_dir):
             tmp = os.path.join(job_dir, f"out{g}.zim")
             log.stage(f"Building ZIM {g}/{len(groups)}: {name}")
             status = builder.build(log, group, tmp, title or None)
-            dest = unique(os.path.join(out_dir, C.safe_filename(name + suffix) + ".zim"))
+            if job.get("neutral_names"):  # the file name doesn't say what's inside (its own title and pages still do)
+                n = 1
+                while os.path.exists(os.path.join(out_dir, time.strftime(f"zim-%Y%m%d-{n}.zim"))):
+                    n += 1
+                dest = os.path.join(out_dir, time.strftime(f"zim-%Y%m%d-{n}.zim"))
+            else:
+                dest = unique(os.path.join(out_dir, C.safe_filename(name + suffix) + ".zim"))
             log.stage(f"Saving {os.path.basename(dest)}")
             shutil.move(tmp, dest)
             size = os.path.getsize(dest)

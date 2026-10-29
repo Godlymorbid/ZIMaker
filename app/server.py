@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -87,13 +88,65 @@ def zim_open(path):
         title = a.get_metadata("Title").decode("utf-8", "replace")
     except (KeyError, RuntimeError):
         title = os.path.splitext(os.path.basename(wp))[0]
+    ZIMS[zid]["title"] = title
     shown = path if not wp.startswith(C.UPLOADS) else os.path.basename(wp)
-    lib = [x for x in _library_load() if x.get("path") != shown]
-    if not wp.startswith(C.UPLOADS):  # uploaded copies aren't kept in the library
+    # uploaded copies aren't kept in the library, and nothing is in private mode
+    if not wp.startswith(C.UPLOADS) and not private():
+        lib = [x for x in _library_load() if x.get("path") != shown]
         lib.insert(0, {"path": shown, "title": title, "t": time.time()})
         json.dump(lib[:100], open(LIBRARY, "w", encoding="utf-8"))
     return {"id": zid, "title": title, "path": shown, "articles": a.article_count,
             "size": os.path.getsize(wp), "search": bool(a.has_fulltext_index)}
+
+
+def private():
+    from zc import settings
+    return settings.load()["private"]
+
+
+def clear_history():
+    """Forget what was made and opened: job folders (with their logs and web addresses), uploaded copies, the
+    list of opened ZIMs. Jobs still running or queued are kept. The ZIM files themselves stay where they were saved."""
+    with LOCK:
+        keep = set(QUEUE) | {j for j, p in PROCS.items() if p.poll() is None}
+    in_use = set()
+    n = 0
+    for jid in (os.listdir(C.JOBS) if os.path.isdir(C.JOBS) else []):
+        d = os.path.join(C.JOBS, jid)
+        if jid in keep:
+            try:
+                in_use |= {s.get("path", "") for s in json.load(open(os.path.join(d, "job.json"), encoding="utf-8"))["sources"]}
+            except (OSError, ValueError, KeyError):
+                pass
+            continue
+        shutil.rmtree(d, ignore_errors=True)
+        n += 1
+    for name in (os.listdir(C.UPLOADS) if os.path.isdir(C.UPLOADS) else []):
+        d = os.path.join(C.UPLOADS, name)
+        if not any(p.startswith(d + os.sep) for p in in_use) and not any(z["path"].startswith(d + os.sep) for z in ZIMS.values()):
+            shutil.rmtree(d, ignore_errors=True)
+    if os.path.exists(LIBRARY):
+        os.remove(LIBRARY)
+    shutil.rmtree(os.path.join(C.HOME, "peek"), ignore_errors=True)   # "Check links" scratch space
+    return n
+
+
+def proxy_test(p):
+    """Fetch the address the outside world sees, through proxy p (from the Settings window, not saved yet)."""
+    p = C.clean_proxy(p)
+    t = time.time()
+    try:
+        req = urllib.request.Request("https://check.torproject.org/api/ip", headers=C.UA)
+        with C.proxy_opener(p).open(req, timeout=40) as r:
+            d = json.load(r)
+        return {"ok": True, "ip": d.get("IP", ""), "tor": bool(d.get("IsTor")), "seconds": round(time.time() - t, 1)}
+    except Exception as e:  # noqa: BLE001
+        why = str(getattr(e, "reason", "") or e)
+        out = {"ok": False, "error": why}
+        if C.IS_WSL and p["type"] != "off" and p["host"].strip("[]") in ("127.0.0.1", "localhost", "::1") and \
+                ("refused" in why.lower() or "timed out" in why.lower()):
+            out["wsl_hint"] = True  # a proxy on Windows' own 127.0.0.1 can't be reached from WSL's default network
+        return out
 
 
 def forget(path):
@@ -228,6 +281,10 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-store")  # the browser keeps no copies of jobs, settings or ZIM pages
+        super().end_headers()
+
     def _json(self, obj, code=200):
         b = json.dumps(obj).encode()
         self.send_response(code)
@@ -264,6 +321,11 @@ class H(BaseHTTPRequestHandler):
             self._file(os.path.join(APP, "viewer.html"), "text/html; charset=utf-8")
         elif u.path == "/api/zim/library":
             self._json({"items": library()})
+        elif re.fullmatch(r"/api/zim/\w+/info", u.path):
+            # the viewer asks for the title here rather than carrying it in its address (which the browser remembers)
+            z = ZIMS.get(u.path.split("/")[3])
+            self._json({"title": z["title"], "private": private()} if z else {"error": "This ZIM isn't open any more."},
+                       200 if z else 404)
         elif u.path.startswith("/api/zim/") and u.path.endswith("/search"):
             zid = u.path.split("/")[3]
             q = urllib.parse.parse_qs(u.query)
@@ -342,7 +404,10 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Accept-Ranges", "bytes")
         if code == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
-        self.send_header("Content-Security-Policy", "sandbox allow-same-origin allow-popups allow-popups-to-escape-sandbox")
+        # no scripts (sandbox), and nothing loaded from the internet: a remote picture or font would tell the
+        # network what is being read (links still open, in the browser, when clicked)
+        self.send_header("Content-Security-Policy", "default-src 'self' 'unsafe-inline' data: blob:; "
+                                                    "sandbox allow-same-origin allow-popups allow-popups-to-escape-sandbox")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         if total:
@@ -434,7 +499,7 @@ class H(BaseHTTPRequestHandler):
             prof = st["profiles"][pname]
             job = {"sources": sources, "mode": body.get("mode", "pictures"), "combine": bool(body.get("combine")),
                    "title": body.get("title", ""), "output_dir": out_dir, "created": time.time(),
-                   "label": C.clip(label, 120), "profile": pname,
+                   "label": C.clip(label, 120), "profile": pname, "neutral_names": st["neutral_names"],
                    "quality": prof["quality"], "sensitivity": prof["sensitivity"],
                    "web": {"max_pages": int(body.get("max_pages") or 300),
                            "scope": body.get("scope") if body.get("scope") in ("section", "page") else "site",
@@ -468,6 +533,10 @@ class H(BaseHTTPRequestHandler):
                 return self._json(zim_open(self._body().get("path", "")))
             except Exception as e:  # noqa: BLE001
                 return self._json({"error": str(e)}, 400)
+        if u.path == "/api/proxy/test":
+            return self._json(proxy_test(self._body().get("proxy")))
+        if u.path == "/api/history/clear":
+            return self._json({"ok": True, "removed": clear_history()})
         if u.path == "/api/zim/forget":
             forget(self._body().get("path", ""))
             return self._json({"ok": True})
@@ -513,8 +582,13 @@ def main():
     threading.Thread(target=setup_thread, daemon=True).start()
     threading.Thread(target=scheduler, daemon=True).start()
     threading.Thread(target=watchdog, daemon=True).start()
+    if private():  # private mode: also catches anything left behind if ZIMaker didn't stop normally last time
+        clear_history()
     print(f"ZIMaker is running at http://127.0.0.1:{PORT}", flush=True)
     srv.serve_forever()
+    if private():
+        time.sleep(1)  # let cancelled jobs finish exiting, so their folders go too
+        clear_history()
 
 
 if __name__ == "__main__":
