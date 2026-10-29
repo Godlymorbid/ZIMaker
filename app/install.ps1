@@ -20,10 +20,50 @@ Write-Host "Turns websites, archive.org books, ebooks, documents and pictures in
 #    since WSL distributions belong to the Windows account that installs them.
 Step "Checking WSL (Windows Subsystem for Linux)"
 $env:WSL_UTF8 = '1'   # plain text from wsl.exe instead of UTF-16
-function Linux-Works { try { $o = & wsl.exe -e sh -c "echo zc-ok" 2>$null; return (($o -join '') -match 'zc-ok') } catch { return $false } }
 function Wsl-On { try { & wsl.exe --status *> $null; return ($LASTEXITCODE -eq 0) } catch { return $false } }
 
-if (-not (Linux-Works)) {
+# The user's distributions, from "wsl -l -v" (its header line is translated, so skip it; the default has a *).
+# Docker's and Rancher's internal ones can't run ZIMaker, so don't even start them.
+function Get-Distros {
+  $lines = try { @(& wsl.exe -l -v 2>$null) } catch { @() }
+  if ($LASTEXITCODE -ne 0) { return @() }
+  $list = @()
+  foreach ($l in ($lines | Select-Object -Skip 1)) {
+    $t = ($l -replace "`0", '').Trim()   # older wsl.exe ignores WSL_UTF8 and writes UTF-16
+    if (-not $t) { continue }
+    $name = ($t.TrimStart('*').Trim() -split '\s+')[0]
+    if ($name -match '^(docker-desktop|rancher-desktop)') { continue }
+    $list += [pscustomobject]@{ Name = $name; Default = $t.StartsWith('*') }
+  }
+  return $list
+}
+
+# Can ZIMaker run in this distribution? $null if it doesn't start (or is Alpine, whose libraries ZIMaker's don't fit).
+$probe = '[ -f /etc/alpine-release ] && echo zc-alpine && exit 0; command -v apt-get >/dev/null 2>&1 && a=apt || a=noapt; ' +
+         'python3 -c ''import sys; sys.exit(sys.version_info < (3, 9))'' >/dev/null 2>&1 && p=py || p=nopy; echo zc-$a-$p'
+function Test-Distro($n) {
+  $o = try { (& wsl.exe -d $n -e sh -c $probe 2>$null) -join '' } catch { '' }
+  if ($o -match 'zc-(apt|noapt)-(py|nopy)') { return [pscustomobject]@{ Apt = ($Matches[1] -eq 'apt'); Python = ($Matches[2] -eq 'py') } }
+  return $null
+}
+
+function Install-Ubuntu($name) {
+  Write-Host "Installing $name. When it asks, pick a username and password for Linux (they don't have to match Windows)."
+  Write-Host "When you see a Linux prompt (ending in `$), type  exit  and press Enter to continue." -ForegroundColor Yellow
+  & wsl.exe --install -d $name --web-download
+  if ($LASTEXITCODE -ne 0) { & wsl.exe --install -d $name }   # older WSL without --web-download
+  $r = Test-Distro $name
+  if (-not ($r -and $r.Python)) {
+    Fail ("$name didn't finish installing.`n" +
+          "Open PowerShell and run:  wsl --install -d $name`n" +
+          "pick a Linux username and password, then run 'Install ZIMaker' again.")
+  }
+}
+
+$DistroFile = Join-Path $Dest 'distro.txt'   # the distribution ZIMaker runs in; kept across updates
+$Distro = ''
+$all = @(Get-Distros)
+if (-not $all.Count) {
   if (-not (Wsl-On)) {
     Write-Host "ZIMaker runs its converter in WSL, which isn't turned on on this PC yet."
     if (-not (Ask "Turn on WSL now? (needs administrator approval, then a restart)")) {
@@ -46,32 +86,84 @@ if (-not (Linux-Works)) {
     }
   }
 
-  # WSL is on but has no working Linux: install Ubuntu for this user, right here in this window.
+  # WSL is on but has no Linux: install Ubuntu for this user, right here in this window.
   Write-Host "WSL is on, but there's no Linux installed for your account yet."
   if (-not (Ask "Install Ubuntu now? (about 500 MB download, no administrator needed)")) {
     Fail "ZIMaker needs a Linux distribution in WSL. You can install one later with:  wsl --install -d Ubuntu"
   }
-  Write-Host "Installing Ubuntu. When it asks, pick a username and password for Linux (they don't have to match Windows)."
-  Write-Host "When you see a Linux prompt (ending in `$), type  exit  and press Enter to continue." -ForegroundColor Yellow
-  & wsl.exe --install -d Ubuntu --web-download
-  if ($LASTEXITCODE -ne 0) { & wsl.exe --install -d Ubuntu }   # older WSL without --web-download
-  & wsl.exe --set-default Ubuntu *> $null
-  if (-not (Linux-Works)) {
-    Fail ("Ubuntu didn't finish installing.`n" +
-          "Open PowerShell and run:  wsl --install -d Ubuntu`n" +
-          "pick a Linux username and password, then run 'Install ZIMaker' again.")
+  Install-Ubuntu 'Ubuntu'
+  $Distro = 'Ubuntu'
+}
+
+# 2. Which distribution ZIMaker runs in. Keep the one chosen before while it still works (updates ask nothing).
+$saved = if (Test-Path $DistroFile) { "$(Get-Content $DistroFile -TotalCount 1)".Trim() } else { '' }
+if (-not $Distro -and $saved -and (@($all.Name) -contains $saved)) {
+  $r = Test-Distro $saved
+  if ($r -and $r.Python) { $Distro = $saved }
+}
+if (-not $Distro) {
+  Write-Host "Checking your Linux distributions in WSL..."
+  $cands = @()
+  foreach ($d in $all) {
+    $r = Test-Distro $d.Name
+    if (-not $r) { Write-Host "  $($d.Name): can't run ZIMaker"; continue }
+    if (-not $r.Python -and -not $r.Apt) { Write-Host "  $($d.Name): has no Python 3.9 or newer"; continue }
+    # best first: ready Debian/Ubuntu, then Debian/Ubuntu missing Python, then others; within those, the default, then Ubuntu
+    $kind = if (-not $r.Apt) { 2 } elseif (-not $r.Python) { 1 } else { 0 }
+    $pref = if ($d.Default) { 0 } elseif ($d.Name -match '^Ubuntu') { 1 } else { 2 }
+    $note = @()
+    if ($d.Default) { $note += 'your default' }
+    if (-not $r.Python) { $note += 'ZIMaker will add Python to it' }
+    if (-not $r.Apt) { $note += "the optional tools (video, 7-Zip, LibreOffice) need Ubuntu or Debian" }
+    $cands += [pscustomobject]@{ Name = $d.Name; Python = $r.Python; Rank = $kind * 10 + $pref; Note = ($note -join '; ') }
+  }
+  $cands = @($cands | Sort-Object Rank, Name)
+  # a separate Ubuntu can be added under a name that isn't taken yet
+  $newName = @('Ubuntu', 'Ubuntu-24.04') | Where-Object { @($all.Name) -notcontains $_ } | Select-Object -First 1
+
+  $pick = $null
+  if (-not $cands.Count) {
+    if ($Quiet) { Fail "None of your WSL Linux distributions can run ZIMaker. Run 'Install ZIMaker' to set one up." }
+    if (-not $newName) { Fail "None of your WSL Linux distributions can run ZIMaker. Install Python 3 in your Ubuntu, then run 'Install ZIMaker' again." }
+    Write-Host "None of your Linux distributions can run ZIMaker."
+    if (-not (Ask "Install $newName for ZIMaker, next to them? (about 500 MB, no administrator needed; your default stays the same)")) {
+      Fail "ZIMaker needs a Linux distribution it can run in. You can add one later with:  wsl --install -d Ubuntu"
+    }
+    $pick = 'new'
+  } elseif ($Quiet) {
+    $pick = $cands[0]
+  } else {
+    Write-Host ""
+    Write-Host "ZIMaker can run in one of your existing Linux distributions:"
+    for ($i = 0; $i -lt $cands.Count; $i++) {
+      $n = $cands[$i].Note; Write-Host ("  [{0}] {1}{2}" -f ($i + 1), $cands[$i].Name, $(if ($n) { "  ($n)" } else { '' }))
+    }
+    if ($newName) { Write-Host "  [U] Install a separate $newName just for ZIMaker (about 500 MB; your default stays the same)" }
+    Write-Host "It only adds its own folder (~/.zimaker) and doesn't change anything else in the one you pick."
+    while (-not $pick) {
+      $a = (Read-Host "Choose [1]").Trim()
+      if (-not $a) { $a = '1' }
+      if ($newName -and $a -match '^[uU]$') { $pick = 'new' }
+      elseif ($a -match '^\d+$' -and [int]$a -ge 1 -and [int]$a -le $cands.Count) { $pick = $cands[[int]$a - 1] }
+      else { Write-Host "Type a number from the list$(if ($newName) { ' or U' })." }
+    }
+  }
+
+  if ($pick -eq 'new') {
+    Install-Ubuntu $newName
+    $Distro = $newName
+  } else {
+    $Distro = $pick.Name
+    if (-not $pick.Python) {
+      Write-Host "Adding Python to $Distro (its package manager, as root)..."
+      & wsl.exe -d $Distro -u root -- sh -c "apt-get update && apt-get install -y python3"
+      $r = Test-Distro $Distro
+      if (-not ($r -and $r.Python)) { Fail "Couldn't install Python in $Distro. Open it and run:  sudo apt install python3  then run 'Install ZIMaker' again." }
+    }
   }
 }
-Write-Host "WSL is ready."
-
-# 2. Python 3.9+ in the default distribution
-$py = (& wsl.exe -e sh -c "command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; print(sys.version_info >= (3, 9))'" 2>$null) -join ''
-if ($py -notmatch 'True') {
-  Fail ("Your default WSL Linux has no Python 3.9 or newer.`n" +
-        "If it's Ubuntu, open Ubuntu and run:  sudo apt install python3`n" +
-        "Or install Ubuntu (wsl --install -d Ubuntu) and make it the default (wsl --set-default Ubuntu).")
-}
-Write-Host "Python is ready."
+$D = @('-d', $Distro)   # every wsl.exe call below runs in ZIMaker's distribution
+Write-Host "WSL is ready. ZIMaker will run in: $Distro"
 
 # 3. Stop a running copy (upgrade), then copy the files
 Step "Installing to $Dest"
@@ -85,11 +177,12 @@ if ($Source -ne $Dest) {
   Get-ChildItem $Dest -Recurse -Directory -Filter '__pycache__' | Remove-Item -Recurse -Force
 }
 Get-ChildItem $Dest -Recurse -File | Unblock-File   # files from a downloaded zip are marked as "from the internet"
+Set-Content -LiteralPath $DistroFile -Value $Distro -Encoding Ascii   # read by the launchers, uninstaller and updater
 Write-Host "Files copied."
 
 # 4. Libraries inside WSL (~150 MB, first time only)
 Step "Setting up the converter's libraries in WSL (first time: about 150 MB)"
-& wsl.exe -e python3 -I "$(To-Wsl $Dest)/app/setup.py"
+& wsl.exe @D -e python3 -I "$(To-Wsl $Dest)/app/setup.py"
 if ($LASTEXITCODE -ne 0) { Fail "Setting up the libraries failed (see above). Check your internet connection and run the installer again." }
 
 # 5. Shortcuts

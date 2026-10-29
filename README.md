@@ -14,8 +14,7 @@ Turns websites, archive.org books, ebooks, documents, emails, pictures, audio an
 The installer:
 
 - checks for WSL (Windows Subsystem for Linux), and offers to turn it on if it's off;
-- checks for a Linux distribution, and offers to install Ubuntu for your account if there isn't one;
-- checks for Python 3.9 or newer inside WSL;
+- picks the Linux distribution ZIMaker runs in. If you already have some, it lists the ones that can run it (Ubuntu or Debian work best; Docker's internal one and Alpine can't) and asks which to use, or offers to install a separate Ubuntu next to them. Your default distribution stays the same. If there's none, it offers to install Ubuntu for your account. The choice is remembered (in `distro.txt` in the install folder), so updates don't ask again;
 - installs ZIMaker for the current Windows user in `%LOCALAPPDATA%\Programs\ZIMaker` (no administrator rights needed);
 - downloads the libraries it needs, about 150 MB;
 - adds a **ZIMaker** icon to the desktop and to the Start menu.

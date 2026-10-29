@@ -36,8 +36,10 @@ def find(name, binary=None):
 def install_command(names=None):
     names = names or list(TOOLS)
     pkgs = " ".join(p for n in names for p in TOOLS[n]["packages"])
-    if C.IS_WSL:  # typed into Windows PowerShell; runs Ubuntu's package manager inside WSL as administrator
-        return f"wsl -u root -- sh -c \"apt-get update && apt-get install -y {pkgs}\""
+    if C.IS_WSL:  # typed into Windows PowerShell; runs the package manager inside ZIMaker's WSL distribution as root
+        distro = os.environ.get("WSL_DISTRO_NAME", "")
+        d = f"-d {distro} " if distro and " " not in distro else ""
+        return f"wsl {d}-u root -- sh -c \"apt-get update && apt-get install -y {pkgs}\""
     return f"sudo apt install {pkgs}"
 
 

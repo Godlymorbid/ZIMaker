@@ -112,7 +112,11 @@ def apply():
             f"Remove-Item -LiteralPath {lit(C.to_win(staging))} -Recurse -Force -ErrorAction SilentlyContinue",
             "$d = Join-Path $env:LOCALAPPDATA 'Programs\\ZIMaker'",
             "$w = '/mnt/' + $d.Substring(0, 1).ToLower() + ($d.Substring(2) -replace '\\\\', '/')",
-            "Start-Process -WindowStyle Hidden wsl.exe -ArgumentList '-e', 'python3', '-I', ('\"' + $w + '/app/server.py\"')",
+            # restart in the distribution ZIMaker uses (the installer may have just chosen it)
+            "$f = Join-Path $d 'distro.txt'",
+            f"$n = if (Test-Path $f) {{ (Get-Content $f -TotalCount 1).Trim() }} else {{ {lit(os.environ.get('WSL_DISTRO_NAME', ''))} }}",
+            "$a = @(); if ($n) { $a = @('-d', $n) }",
+            "Start-Process -WindowStyle Hidden wsl.exe -ArgumentList ($a + @('-e', 'python3', '-I', ('\"' + $w + '/app/server.py\"')))",
             "Stop-Transcript | Out-Null",
         ])
         encoded = base64.b64encode(script.encode("utf-16-le")).decode()

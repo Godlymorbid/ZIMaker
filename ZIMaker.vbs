@@ -1,15 +1,25 @@
 ' ZIMaker launcher: starts the converter (hidden, in WSL) and opens it in its own app window.
 ' The converter stops by itself once the window is closed and no conversion is running.
 Option Explicit
-Dim sh, fso, dir, wslDir, url, i
+Dim sh, fso, dir, wslDir, url, i, distro, f
 Set sh = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 dir = fso.GetParentFolderName(WScript.ScriptFullName)
 wslDir = "/mnt/" & LCase(Left(dir, 1)) & Replace(Mid(dir, 3), "\", "/")
 url = "http://localhost:8765/"
 
+' The WSL distribution the installer chose (none: the default one)
+distro = ""
+If fso.FileExists(dir & "\distro.txt") Then
+  Set f = fso.OpenTextFile(dir & "\distro.txt", 1)
+  If Not f.AtEndOfStream Then distro = Trim(f.ReadLine)
+  f.Close
+End If
+' unquoted: wsl.exe takes quotes as part of the name (names can't contain spaces anyway)
+If distro <> "" And InStr(distro, " ") = 0 And InStr(distro, """") = 0 Then distro = "-d " & distro & " " Else distro = ""
+
 If Not IsUp() Then
-  sh.Run "wsl.exe -e python3 -I """ & wslDir & "/app/server.py""", 0, False
+  sh.Run "wsl.exe " & distro & "-e python3 -I """ & wslDir & "/app/server.py""", 0, False
   For i = 1 To 90
     WScript.Sleep 1000
     If IsUp() Then Exit For

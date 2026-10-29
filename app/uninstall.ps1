@@ -16,7 +16,9 @@ foreach ($folder in @([Environment]::GetFolderPath('Desktop'), [Environment]::Ge
 
 $a = if ($Quiet) { 'y' } else { Read-Host "Also remove its libraries and job logs inside WSL (~/.zimaker, about 150 MB)? [Y/n]" }
 if ($a -notmatch '^[nN]') {
-  & wsl.exe -e sh -c 'rm -rf "$HOME/.zimaker"' 2>$null
+  $f = Join-Path $Dir 'distro.txt'   # the WSL distribution ZIMaker ran in
+  $D = if (Test-Path $f) { @('-d', "$(Get-Content $f -TotalCount 1)".Trim()) } else { @() }
+  & wsl.exe @D -e sh -c 'rm -rf "$HOME/.zimaker"' 2>$null
   Write-Host "Removed ~/.zimaker in WSL."
 }
 
