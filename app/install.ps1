@@ -62,6 +62,7 @@ function Install-Ubuntu($name) {
 
 $DistroFile = Join-Path $Dest 'distro.txt'   # the distribution ZIMaker runs in; kept across updates
 $Distro = ''
+$Ours = $false   # ZIMaker installed this distribution itself (the uninstaller can then offer to remove it)
 $all = @(Get-Distros)
 if (-not $all.Count) {
   if (-not (Wsl-On)) {
@@ -92,14 +93,14 @@ if (-not $all.Count) {
     Fail "ZIMaker needs a Linux distribution in WSL. You can install one later with:  wsl --install -d Ubuntu"
   }
   Install-Ubuntu 'Ubuntu'
-  $Distro = 'Ubuntu'
+  $Distro = 'Ubuntu'; $Ours = $true
 }
 
 # 2. Which distribution ZIMaker runs in. Keep the one chosen before while it still works (updates ask nothing).
 $saved = if (Test-Path $DistroFile) { "$(Get-Content $DistroFile -TotalCount 1)".Trim() } else { '' }
 if (-not $Distro -and $saved -and (@($all.Name) -contains $saved)) {
   $r = Test-Distro $saved
-  if ($r -and $r.Python) { $Distro = $saved }
+  if ($r -and $r.Python) { $Distro = $saved; $Ours = @(Get-Content $DistroFile) -contains 'installed-by-zimaker' }
 }
 if (-not $Distro) {
   Write-Host "Checking your Linux distributions in WSL..."
@@ -151,7 +152,7 @@ if (-not $Distro) {
 
   if ($pick -eq 'new') {
     Install-Ubuntu $newName
-    $Distro = $newName
+    $Distro = $newName; $Ours = $true
   } else {
     $Distro = $pick.Name
     if (-not $pick.Python) {
@@ -177,7 +178,8 @@ if ($Source -ne $Dest) {
   Get-ChildItem $Dest -Recurse -Directory -Filter '__pycache__' | Remove-Item -Recurse -Force
 }
 Get-ChildItem $Dest -Recurse -File | Unblock-File   # files from a downloaded zip are marked as "from the internet"
-Set-Content -LiteralPath $DistroFile -Value $Distro -Encoding Ascii   # read by the launchers, uninstaller and updater
+# line 1 (read by the launchers, uninstaller and updater): the distribution; line 2: whether ZIMaker installed it
+Set-Content -LiteralPath $DistroFile -Value (@($Distro) + $(if ($Ours) { @('installed-by-zimaker') } else { @() })) -Encoding Ascii
 Write-Host "Files copied."
 
 # 4. Libraries inside WSL (~150 MB, first time only)

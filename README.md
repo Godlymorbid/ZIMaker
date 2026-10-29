@@ -21,7 +21,11 @@ The installer:
 
 Turning on WSL needs administrator approval and a restart. After the restart, run the installer again: it installs Ubuntu (no administrator needed) and asks you to pick a Linux username and password. When you see the Linux prompt, type `exit` and the installer carries on.
 
-ZIMaker updates itself (see **Updates** below). You can also update by running a newer copy's installer over the old one; that also replaces an older install called "ZIM Creator", keeping its job history. To remove ZIMaker, run `Uninstall ZIMaker.cmd` in the install folder. Uninstalling never touches the ZIM files you made.
+ZIMaker updates itself (see **Updates** below). You can also update by running a newer copy's installer over the old one; that also replaces an older install called "ZIM Creator", keeping its job history. To remove ZIMaker, run `Uninstall ZIMaker.cmd` in the install folder. Uninstalling never touches the ZIM files you made. It asks before each of these:
+
+- removing its libraries and job logs inside WSL (Yes by default);
+- removing the Linux distribution ZIMaker ran in (No by default). If ZIMaker installed it, answer y; if you had it before ZIMaker, you have to type its name, since this deletes everything in it;
+- removing WSL itself from Windows (No by default). This is offered only when no Linux distributions are left (so Docker Desktop's, for example, keeps it), and needs administrator approval and a restart.
 
 Windows may warn about running scripts from a downloaded zip ("Windows protected your PC"). Click **More info → Run anyway**.
 
