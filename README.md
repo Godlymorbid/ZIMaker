@@ -2,8 +2,11 @@
 
 Turns websites, archive.org books, ebooks, documents, emails, pictures, audio and video into ZIM files for Kiwix, and opens ZIM files so you can read and search them. It runs on **Windows** and **Linux**.
 
-## Full Transparency
-Yes, AI was used in the creation of this app. No, I do not care if you hate that. This was created for my own use at home, and for my wife to have a drag and drop tool to gather tools for home education. If you dislike it, please make your own version, and send it my way. I am in no way emotionally attached to this project.
+## About this project
+
+I built ZIMaker with a lot of help from AI, for use at home, mainly so my wife has a simple drag-and-drop way to gather material for home education. I'm sharing it in case it's useful to you too. It comes with no guarantees. If it doesn't suit you, feel free to fork it or build your own (and send it my way).
+
+**The privacy and proxy features haven't been reviewed by a security professional.** If your safety depends on them, get advice for your situation first (see [Privacy and censorship](#privacy-and-censorship) below).
 
 ## Install it (or share it)
 
