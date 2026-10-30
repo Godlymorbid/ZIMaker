@@ -188,16 +188,19 @@ def zim_search(zid, q, kind):
         return {"items": []}
     C.use_lib()
     a = z["archive"]
+    # libzim 4 renamed getResults/getEstimatedMatches to snake_case, and full-text results became objects with .path
+    def results(s, n):
+        return [r if isinstance(r, str) else r.path for r in (getattr(s, "get_results", None) or s.getResults)(0, n)]
     try:
         if kind == "suggest":
             from libzim.suggestion import SuggestionSearcher
-            paths, total = list(SuggestionSearcher(a).suggest(q).getResults(0, 12)), None
+            paths, total = results(SuggestionSearcher(a).suggest(q), 12), None
         else:
             if not a.has_fulltext_index:
                 return {"error": "This ZIM has no full-text index; try the title suggestions instead.", "items": []}
             from libzim.search import Query, Searcher
             s = Searcher(a).search(Query().set_query(q))
-            total, paths = s.getEstimatedMatches(), list(s.getResults(0, 50))
+            total, paths = (getattr(s, "get_estimated_matches", None) or s.getEstimatedMatches)(), results(s, 50)
     except Exception as e:  # noqa: BLE001
         return {"error": f"Search failed ({e})", "items": []}
     items = []

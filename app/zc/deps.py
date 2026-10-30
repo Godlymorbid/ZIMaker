@@ -16,6 +16,9 @@ import zipfile
 from . import common as C
 
 PACKAGES = {"libzim": "libzim", "PIL": "pillow", "numpy": "numpy", "pymupdf": "pymupdf", "mobi": "mobi"}
+# Versions tested with ZIMaker. libzim 4.0 changed its API the day it came out (Oct 2026) and broke every build on
+# fresh installs, so new installs get a tested version instead of whatever is newest. (Code works with 3.13 and 4.0.)
+PINS = {"libzim": "4.0.0"}
 PANDOC = os.path.join(C.HOME, "pandoc")  # Pandoc converts DOCX, ODT, RTF, Markdown, PPTX, XLSX, ... to EPUB
 
 
@@ -23,7 +26,8 @@ def _wheel_url(project):
     ver = sys.version_info[:2]
     tag = f"cp{ver[0]}{ver[1]}"
     arch = platform.machine()  # x86_64 on Intel/AMD PCs, aarch64 on ARM (Snapdragon) PCs
-    d = C.get_json(f"https://pypi.org/pypi/{project}/json")
+    pin = PINS.get(project)
+    d = C.get_json(f"https://pypi.org/pypi/{project}/{pin}/json" if pin else f"https://pypi.org/pypi/{project}/json")
     for f in d["urls"]:
         n = f["filename"]
         if not n.endswith(".whl"):

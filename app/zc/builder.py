@@ -124,7 +124,10 @@ def build(log, volumes, out_path, title=None):
 
     with Creator(out_path).config_indexing(True, lang) as c:
         c.set_mainpath("index" if multi else ("v1/" + v0["main"] if v0["kind"] == "site" else "v1/index"))
-        c.add_illustration(48, _icon())
+        try:
+            c.add_illustration(content=_icon(), width=48)   # libzim 4 (content first; it also allows other sizes)
+        except TypeError:
+            c.add_illustration(48, _icon())                 # libzim 3: (size, content)
         meta = {
             "Title": C.clip(title, 30),
             "Name": C.slug(title, 50),
