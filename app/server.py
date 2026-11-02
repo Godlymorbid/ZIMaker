@@ -506,7 +506,9 @@ class H(BaseHTTPRequestHandler):
                    "quality": prof["quality"], "sensitivity": prof["sensitivity"],
                    "web": {"max_pages": int(body.get("max_pages") or 300),
                            "scope": body.get("scope") if body.get("scope") in ("section", "page") else "site",
-                           "media": bool(prof.get("web_media")), "scripts": bool(prof.get("web_scripts"))}}
+                           "media": bool(prof.get("web_media")),
+                           # the main screen's checkbox; the profile's setting if the window didn't send one
+                           "scripts": bool(body["scripts"] if "scripts" in body else prof.get("web_scripts"))}}
             json.dump(job, open(os.path.join(d, "job.json"), "w", encoding="utf-8"))
             C.Log(d).stage("Waiting in queue", status="queued")
             with LOCK:

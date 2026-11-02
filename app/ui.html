@@ -259,7 +259,9 @@ body.dragging #drop{display:flex}
     <label class="opt"><input type="radio" name="scope" value="site" checked> The whole site</label>
     <label class="opt"><input type="radio" name="scope" value="section"> Only the section I linked to
       <small>e.g. for https://example.com/docs/ only pages under /docs/</small></label>
-    <div class="hint">Links to pages that aren't saved keep pointing at the live site. Sites that build their pages with JavaScript may not come out well. Audio and video aren't saved.
+    <label class="opt"><input type="checkbox" id="webscripts"> Keep the site's JavaScript
+      <small>Off (recommended): pages are saved as they look without scripts, the same in Kiwix as in the preview here. Turn on only if a site comes out blank or broken without them.</small></label>
+    <div class="hint">Links to pages that aren't saved keep pointing at the live site. Sites that build their pages with JavaScript may not come out well. Audio and video are saved only if the profile says so.
       Some sites (many big news sites, for example) block automated downloads; for those, use your browser's Print → Save as PDF and add the PDF instead.</div>
     <div style="margin-top:10px"><b>Output</b></div>
     <label class="opt"><input type="radio" name="combine" value="0" checked> One ZIM per book / volume</label>
@@ -498,6 +500,7 @@ function applyProfile(name) {
   if (!p) return;
   radio("mode", p.mode); radio("combine", p.combine ? "1" : "0"); radio("scope", p.scope);
   $("#maxpages").value = p.max_pages; $("#outdir").value = p.output_dir;
+  $("#webscripts").checked = !!p.web_scripts;
 }
 async function loadSettings() {
   settings = await api("/api/settings");
@@ -521,7 +524,7 @@ $("#saveprofile").onclick = async () => {
   const name = settings.active, p = settings.profiles[name];
   Object.assign(p, {mode: radioVal("mode"), combine: radioVal("combine") === "1", scope: radioVal("scope"),
                     max_pages: parseInt($("#maxpages").value, 10) || p.max_pages,
-                    output_dir: $("#outdir").value.trim() || p.output_dir});
+                    output_dir: $("#outdir").value.trim() || p.output_dir, web_scripts: $("#webscripts").checked});
   try { await saveSettings(settings); $("#profilemsg").innerHTML = `<span class="good">Saved to “${esc(name)}”.</span>`; }
   catch (e) { $("#profilemsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
   setTimeout(() => { $("#profilemsg").textContent = ""; }, 4000);
@@ -634,6 +637,7 @@ $("#build").onclick = async () => {
     output_dir: $("#outdir").value.trim(),
     max_pages: parseInt($("#maxpages").value, 10) || 300,
     scope: document.querySelector("input[name=scope]:checked").value,
+    scripts: $("#webscripts").checked,
     profile: settings ? settings.active : undefined,
   };
   if (files.some(f => f.state === "uploading")) { $("#buildmsg").textContent = "Wait for uploads to finish."; return; }

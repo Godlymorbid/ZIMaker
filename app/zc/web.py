@@ -104,9 +104,22 @@ def _unlazy(tag):
     return re.sub(r"""(\sclass\s*=\s*["'](?:[^"']*?\s)?)(lazyload|lazy|rocket-lazyload)(?=[\s"'])""", r"\1lazyloaded", tag, flags=re.I)
 
 
+# Content that a script would have revealed stays hidden without it. These cover the common libraries: scroll
+# animations (AOS, WOW.js, Animate.css, Elementor's entrance animations), lazy-loading leftovers, and full-page
+# "loading" covers that a script removes once the page is ready.
+REVEAL_CSS = ('<style id="zimaker-no-js">'
+              "[data-aos],.wow,.elementor-invisible,.animate__animated,.lazyload,.lazyloading,.lazyloaded,"
+              "[data-lazy-src],[data-src]"
+              "{opacity:1!important;visibility:visible!important;transform:none!important;animation:none!important}"
+              "#preloader,.preloader,#page-preloader,.page-preloader,#page-loader,.page-loader,#loader-wrapper,"
+              ".loader-wrapper,.pace{display:none!important}"
+              "</style>")
+
+
 def static_page(text):
     """The page without its scripts: <script> elements (except JSON data), event handlers such as onclick,
-    javascript: links and script preloads; and lazy-loaded pictures turned into ordinary ones."""
+    javascript: links and script preloads; lazy-loaded pictures turned into ordinary ones; and content that a script
+    would have revealed made visible."""
     text = SCRIPT_RE.sub(lambda m: m.group(0) if m.group(1) is not None and DATA_SCRIPT.search(m.group(1)) else "", text)
     text = SCRIPT_PRELOAD_RE.sub("", text)
 
@@ -114,7 +127,11 @@ def static_page(text):
         t = EVENT_ATTR_RE.sub("", m.group(0))
         t = JS_HREF_RE.sub(r'\1\2#\2', t)
         return _unlazy(t) if re.match(r"<(img|source|iframe|video)\b", t, re.I) else t
-    return OPEN_TAG_RE.sub(tag, text)
+    text = OPEN_TAG_RE.sub(tag, text)
+    # last in <head>, so it wins over the site's own styles (and !important beats their inline ones)
+    if re.search(r"</head\s*>", text, re.I):
+        return re.sub(r"</head\s*>", lambda m: REVEAL_CSS + m.group(0), text, count=1, flags=re.I)
+    return REVEAL_CSS + text
 
 
 def normalize(url):
