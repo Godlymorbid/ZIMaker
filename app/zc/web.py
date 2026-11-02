@@ -1,4 +1,4 @@
-"""Websites: crawl a site (or one section of it) and keep its pages, styles, scripts, fonts and images.
+"""Websites: crawl a site (or one section of it) and keep its pages, styles, fonts and images (scripts only on request).
 
 Pages are saved as the site serves them; only links are rewritten. Links to pages that weren't saved
 (beyond the page limit or out of scope) are left pointing at the live site, so the ZIM has no broken
@@ -71,6 +71,52 @@ def explain(e):
     return str(e)
 
 
+# ---------------------------------------------------------------- pages without their scripts
+# Kiwix runs a page's JavaScript; offline, a site's scripts mostly fail: ad loaders, "please allow ads" nags,
+# performance tools that hold the page back until scripts that never arrive (WP Rocket), trackers. ZIMaker's own
+# viewer never runs them. So by default pages are saved as they look without scripts, which is also how they look in
+# ZIMaker's preview, and pictures that only a script would have loaded ("lazy loading") are made real pictures.
+SCRIPT_RE = re.compile(r"<script\b([^>]*)>.*?</script\s*>|<script\b[^>]*/>", re.I | re.S)
+DATA_SCRIPT = re.compile(r"""\stype\s*=\s*["']?application/(ld\+)?json""", re.I)   # data, not code: keep
+OPEN_TAG_RE = re.compile(r"<[a-zA-Z][^>]*>")
+EVENT_ATTR_RE = re.compile(r"""\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)""", re.I)
+JS_HREF_RE = re.compile(r"""(\shref\s*=\s*)(["'])\s*javascript:.*?\2""", re.I | re.S)
+SCRIPT_PRELOAD_RE = re.compile(r"""<link\b[^>]*\brel\s*=\s*["']?(?:modulepreload|preload[^>]*\bas\s*=\s*["']?script)[^>]*>""", re.I)
+LAZY_RE = re.compile(r"""\s(data-lazy-src|data-src|data-original|data-lazy-srcset|data-srcset)\s*=\s*(["'])(.*?)\2""", re.I | re.S)
+
+
+def _unlazy(tag):
+    """<img src="placeholder" data-lazy-src="real.jpg"> -> <img src="real.jpg"> (and the same for srcset)."""
+    lazy = {m.group(1).lower(): m.group(3) for m in LAZY_RE.finditer(tag)}
+    if not lazy:
+        return tag
+    for real, attr in (("src", ("data-lazy-src", "data-src", "data-original")), ("srcset", ("data-lazy-srcset", "data-srcset"))):
+        val = next((lazy[a] for a in attr if lazy.get(a, "").strip()), None)
+        if val is None:
+            continue
+        cur = re.search(rf"""\s{real}\s*=\s*(["'])(.*?)\1""", tag, re.I | re.S)
+        if cur and cur.group(2).strip() and not cur.group(2).strip().lower().startswith("data:"):
+            continue   # already has a real picture
+        new = f' {real}="{val}"'
+        tag = (tag[:cur.start()] + new + tag[cur.end():]) if cur else re.sub(r"\s*/?>$", lambda m: new + m.group(0), tag, count=1)
+    tag = LAZY_RE.sub("", tag)   # left in place, some sites' CSS keeps [data-lazy-src] pictures invisible
+    # lazysizes / WP Rocket hide pictures (opacity 0) until a script swaps these classes
+    return re.sub(r"""(\sclass\s*=\s*["'](?:[^"']*?\s)?)(lazyload|lazy|rocket-lazyload)(?=[\s"'])""", r"\1lazyloaded", tag, flags=re.I)
+
+
+def static_page(text):
+    """The page without its scripts: <script> elements (except JSON data), event handlers such as onclick,
+    javascript: links and script preloads; and lazy-loaded pictures turned into ordinary ones."""
+    text = SCRIPT_RE.sub(lambda m: m.group(0) if m.group(1) is not None and DATA_SCRIPT.search(m.group(1)) else "", text)
+    text = SCRIPT_PRELOAD_RE.sub("", text)
+
+    def tag(m):
+        t = EVENT_ATTR_RE.sub("", m.group(0))
+        t = JS_HREF_RE.sub(r'\1\2#\2', t)
+        return _unlazy(t) if re.match(r"<(img|source|iframe|video)\b", t, re.I) else t
+    return OPEN_TAG_RE.sub(tag, text)
+
+
 def normalize(url):
     url, _ = urllib.parse.urldefrag(url.strip())
     p = urllib.parse.urlsplit(url)
@@ -118,8 +164,9 @@ MAX_AV = 500_000_000  # per audio/video file, when the profile keeps website aud
 
 
 class Site:
-    def __init__(self, log, start, max_pages, scope, mode, vdir, include_av=False, offline=False):
+    def __init__(self, log, start, max_pages, scope, mode, vdir, include_av=False, offline=False, keep_scripts=False):
         self.log, self.mode, self.vdir = log, mode, vdir
+        self.keep_scripts = keep_scripts  # off: pages are saved without their JavaScript (see static_page)
         self.include_av = include_av and mode != "none"
         self.start = normalize(start)
         if not self.start:
@@ -349,6 +396,8 @@ class Site:
                         if n_pages >= self.max_pages:
                             continue
                         text = self._decode(data, charset)
+                        if not self.keep_scripts:  # before looking for links: the scripts aren't downloaded either
+                            text = static_page(text)
                         t = re.search(r"<title[^>]*>(.*?)</title>", text, re.I | re.S)
                         title = " ".join(html.unescape(t.group(1)).split()) if t else ""
                         if not self._save(url, b"", "text/html", title, "page"):
@@ -441,9 +490,12 @@ def peek(url):
 def prepare(log, url, opts, mode, vdir):
     scope = opts.get("scope", "site")
     max_pages = 1 if scope == "page" else max(1, min(int(opts.get("max_pages") or 300), 50000))
-    site = Site(log, url, max_pages, scope, mode, vdir, include_av=bool(opts.get("media")))
+    site = Site(log, url, max_pages, scope, mode, vdir, include_av=bool(opts.get("media")),
+                keep_scripts=bool(opts.get("scripts")))
     if site.include_av:
         log("keeping the site's audio and video (formats readers can play, up to 500 MB each)")
+    log("keeping the site's JavaScript (it runs in Kiwix)" if site.keep_scripts
+        else "saving pages without their JavaScript, as they look in ZIMaker's preview")
     log(f"[{site.start}] " + ("saving just this page" if scope == "page" else f"saving up to {max_pages} pages"
                               + (f" under {site.prefix}" if scope == "section" else "")))
     n = site.crawl()
@@ -493,7 +545,7 @@ def from_mhtml(log, path, name, mode, vdir):
         data = p.get_payload(decode=True) or b""
         ctype = p.get_content_type()
         if ctype in HTML_TYPES:
-            text = Site._decode(data, p.get_content_charset())
+            text = static_page(Site._decode(data, p.get_content_charset()))  # a saved page: scripts can't work offline
             t = re.search(r"<title[^>]*>(.*?)</title>", text, re.I | re.S)
             if site._save(loc, b"", "text/html", " ".join(html.unescape(t.group(1)).split()) if t else "", "page"):
                 site.raw[loc] = (loc, text)

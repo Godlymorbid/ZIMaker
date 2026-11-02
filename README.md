@@ -121,7 +121,7 @@ The viewer shows the ZIM's pages without running their scripts, so a ZIM from an
 
 | Kind | Formats | What you get |
 |---|---|---|
-| Websites | any http/https address | the site's pages with their styles, scripts, fonts and images; a list of all saved pages |
+| Websites | any http/https address | the site's pages with their styles, fonts and images (without their scripts, unless the profile keeps them); a list of all saved pages |
 | archive.org books | item links or IDs | OCR text of every page, with printed page numbers and running heads; scans of illustrated pages |
 | Ebooks | EPUB, MOBI, AZW, AZW3, FB2 | the book's own chapters, styles and images, plus a contents page and Previous/Next links |
 | Documents | DOCX, ODT, RTF, PPTX, XLSX, CSV, TSV, Markdown, HTML, Jupyter notebooks, LaTeX, reStructuredText, Org, AsciiDoc, Typst, MediaWiki, Textile, txt2tags, Muse, POD, Creole, Djot | converted with Pandoc: split into chapters at headings, with a contents page and the document's pictures |
@@ -227,6 +227,7 @@ An encrypted container doesn't help while it's open, and some places force peopl
 ## Notes
 
 - **Websites:** you choose what to save, so a site's `robots.txt` doesn't block it; ZIMaker still waits between pages when the site's `robots.txt` asks it to (Crawl-delay), and slows down when a site says it's busy. It saves audio and video only when the profile's **website audio and video** option is on. Links to pages that weren't saved (past the page limit, or outside the section) still point at the live site. Sites that build their pages with JavaScript (web apps, infinite scroll) may not come out well.
+- **Websites and JavaScript:** pages are saved without their scripts by default, so they look the same in Kiwix as in ZIMaker's preview. Kiwix runs a page's scripts, and offline most of a site's scripts fail: ad loaders, "please allow ads" messages, speed-up tools that hold the page back, and blank pages. Pictures that only a script would have loaded ("lazy loading") are saved as ordinary pictures. For a site that really needs its scripts, turn on **Keep the site's JavaScript** in the profile. ZIMs made before this change keep their scripts; build them again to get the clean version.
 - **archive.org books:**
   - An item that holds several books (a multi-volume set, for example) gives one volume per book.
   - Borrow-only (lending library) items can't be downloaded; the app says so.

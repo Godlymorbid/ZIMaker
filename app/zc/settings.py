@@ -28,7 +28,7 @@ CHOICES = {
 
 def default_profile():
     return {"mode": "pictures", "combine": False, "output_dir": C.default_output(), "max_pages": 300,
-            "scope": "site", "web_media": False, "quality": "balanced", "sensitivity": "balanced"}
+            "scope": "site", "web_media": False, "web_scripts": False, "quality": "balanced", "sensitivity": "balanced"}
 
 
 def defaults():
@@ -47,7 +47,7 @@ def clean_profile(p):
         x = p.get(k, v)
         if k in CHOICES:
             x = x if x in CHOICES[k] else v
-        elif k in ("combine", "web_media"):
+        elif k in ("combine", "web_media", "web_scripts"):
             x = bool(x)
         elif k == "max_pages":
             try:

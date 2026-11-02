@@ -138,6 +138,8 @@ body.dragging #drop{display:flex}
   <label class="opt"><input type="radio" name="s-scope" value="section"> Only the section I linked to</label>
   <label class="opt"><input type="checkbox" id="s-webmedia"> Save audio and video from websites
     <small>Only formats readers can play, up to 500 MB per file. Off keeps website ZIMs small.</small></label>
+  <label class="opt"><input type="checkbox" id="s-webscripts"> Keep the site's JavaScript
+    <small>Off (recommended): pages are saved as they look without scripts, the way ZIMaker's preview shows them. Kiwix runs scripts, and offline most of a site's scripts fail: ad loaders, "please allow ads" messages, blank pages. Turn on only for a site that doesn't work without its scripts.</small></label>
   <div style="margin-top:8px"><b>Image quality</b> <span class="hint">(page scans and pictures)</span></div>
   <select id="s-quality">
     <option value="small">Smaller files (1400 px, lower quality)</option>
@@ -482,7 +484,7 @@ let settings = null, draft = null, editing = null, defaultOutput = "";
 const radio = (name, v) => { const el = document.querySelector(`input[name="${name}"][value="${v}"]`); if (el) el.checked = true; };
 const radioVal = name => (document.querySelector(`input[name="${name}"]:checked`) || {}).value;
 const freshProfile = () => ({mode: "pictures", combine: false, output_dir: defaultOutput, max_pages: 300,
-                             scope: "site", web_media: false, quality: "balanced", sensitivity: "balanced"});
+                             scope: "site", web_media: false, web_scripts: false, quality: "balanced", sensitivity: "balanced"});
 function setTheme(t) {
   store.set("theme", t);
   if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
@@ -532,6 +534,7 @@ function showDraftProfile() {
   $("#s-outdir").value = p.output_dir; $("#s-maxpages").value = p.max_pages;
   $("#s-quality").value = p.quality; $("#s-sensitivity").value = p.sensitivity;
   $("#s-webmedia").checked = !!p.web_media;
+  $("#s-webscripts").checked = !!p.web_scripts;
   fillProfileSelect($("#s-profile"), Object.keys(draft.profiles), editing);
   $("#p-del").disabled = Object.keys(draft.profiles).length < 2;
 }
@@ -540,7 +543,7 @@ function readDraftProfile() {
   Object.assign(draft.profiles[editing], {
     mode: radioVal("s-mode"), combine: radioVal("s-combine") === "1", scope: radioVal("s-scope"),
     output_dir: $("#s-outdir").value.trim(), max_pages: parseInt($("#s-maxpages").value, 10) || 300,
-    quality: $("#s-quality").value, sensitivity: $("#s-sensitivity").value, web_media: $("#s-webmedia").checked});
+    quality: $("#s-quality").value, sensitivity: $("#s-sensitivity").value, web_media: $("#s-webmedia").checked, web_scripts: $("#s-webscripts").checked});
 }
 function askName(question, start) {
   const n = (prompt(question, start || "") || "").trim().replace(/\s+/g, " ").slice(0, 40);

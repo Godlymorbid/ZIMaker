@@ -506,7 +506,7 @@ class H(BaseHTTPRequestHandler):
                    "quality": prof["quality"], "sensitivity": prof["sensitivity"],
                    "web": {"max_pages": int(body.get("max_pages") or 300),
                            "scope": body.get("scope") if body.get("scope") in ("section", "page") else "site",
-                           "media": bool(prof.get("web_media"))}}
+                           "media": bool(prof.get("web_media")), "scripts": bool(prof.get("web_scripts"))}}
             json.dump(job, open(os.path.join(d, "job.json"), "w", encoding="utf-8"))
             C.Log(d).stage("Waiting in queue", status="queued")
             with LOCK:
