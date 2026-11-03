@@ -62,6 +62,8 @@ Requirements: Python 3.9 or newer, which most distributions include, on a 64-bit
 Click **⚙ Settings** in the top corner.
 
 - **Appearance:** System, Light or Dark. System follows your computer's setting. **Accent color:** pick a swatch or any color with the color picker; button text switches between white and black so it stays readable.
+- **Open ZIMaker in:** Automatic, Microsoft Edge, Google Chrome, Brave, Firefox or your default browser. Edge, Chrome and Brave give ZIMaker a window of its own; Firefox opens it in an ordinary window. If the chosen browser isn't installed, ZIMaker uses Edge or the default browser. The choice applies the next time you open ZIMaker.
+- **Watched folder:** see **Watched folder** below.
 - **Optional tools:** shows whether FFmpeg, 7-Zip and LibreOffice are installed, and the one command that installs the missing ones (see **Optional tools** below).
 - **Updates:** turn the automatic update check on or off, or click **Check for updates now**.
 - **Profiles:** named sets of defaults. Examples: "Websites" (just the linked page, text only) and "Scanned books" (only pages with pictures, sharper images). Create, duplicate, rename and delete them. Each profile sets:
@@ -105,6 +107,24 @@ If an update doesn't finish, close the window and open ZIMaker again. The log is
 5. Optionally set a **Title**, choose the **Save to folder** (a Proton Drive folder works), and click **Build ZIM**.
 
 Jobs run one at a time. The Jobs list shows progress, a log, and **Preview** and **Open folder** buttons when a job is done. Every file is checked with openZIM's `zimcheck` before it's saved.
+
+## Watched folder
+
+**⚙ Settings → Watched folder** turns every file that appears in a folder into a ZIM, using the active profile's options. Point it at the folder your browser saves downloads to.
+
+This is the way to use libraries that block automated tools (the Library of Congress, Gallica, HathiTrust, the Biodiversity Heritage Library):
+
+1. Open the book in your browser, including Tor Browser if you need privacy.
+2. Use the library's own **Download** button (a PDF, page images or text).
+3. ZIMaker picks up the file by itself.
+
+ZIMaker never contacts the library in this case, your browser does, so it's exactly as private as the browser you use.
+
+- Files already in the folder when you turn it on (or switch folders) are left alone. Only new ones are converted.
+- Unfinished downloads (`.crdownload`, `.part` and the like) are skipped, and a file is only taken once its size stops changing.
+- **Delete each file once its ZIM is made** leaves only the ZIM behind. A file is deleted only after its ZIM was saved without errors.
+- ZIMaker remembers which files it has already handled without storing their names, only fingerprints of them.
+- It watches while ZIMaker is open.
 
 ## Open and preview ZIM files
 

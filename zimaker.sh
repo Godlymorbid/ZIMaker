@@ -21,8 +21,21 @@ if ! up; then
   exit 1
 fi
 
-# its own window if a Chromium-based browser is installed, otherwise the default browser
-for b in google-chrome google-chrome-stable chromium chromium-browser microsoft-edge microsoft-edge-stable brave-browser; do
+# The browser chosen in Settings. Chromium-based browsers open ZIMaker in its own app window; Firefox has no app
+# mode, so it gets a new window. "auto": the first Chromium-based browser installed. Otherwise the default browser.
+CHOICE=$(python3 -c 'import json, os; print(json.load(open(os.path.expanduser("~/.zimaker/settings.json"))).get("browser", "auto"))' 2>/dev/null)
+case "$CHOICE" in
+  chrome)  LIST="google-chrome google-chrome-stable chromium chromium-browser" ;;
+  brave)   LIST="brave-browser brave" ;;
+  edge)    LIST="microsoft-edge microsoft-edge-stable" ;;
+  firefox) LIST="" ;;
+  default) LIST="" ;;
+  *)       LIST="google-chrome google-chrome-stable chromium chromium-browser microsoft-edge microsoft-edge-stable brave-browser" ;;
+esac
+if [ "$CHOICE" = firefox ] && command -v firefox >/dev/null 2>&1; then
+  exec firefox -new-window "$URL" >/dev/null 2>&1
+fi
+for b in $LIST; do
   if command -v "$b" >/dev/null 2>&1; then
     exec "$b" --app="$URL" --window-size=1000,950 >/dev/null 2>&1
   fi

@@ -269,6 +269,135 @@ def job_summary(jid):
             "result": res, "log": log}
 
 
+def new_job(body):
+    """Queue a job from the window's options (or the watched folder's). Returns its id; ValueError: what's wrong."""
+    sources = []
+    for line in body.get("links", "").splitlines():
+        if line.strip():
+            kind, val = classify(line)
+            if kind == "ia":
+                sources.append({"type": "ia", "id": val})
+            elif kind == "web":
+                sources.append({"type": "web", "url": val, "name": val})
+            elif kind == "lib":
+                sources.append({"type": "lib", "url": val, "name": val})
+            else:
+                raise ValueError(f"{line.strip()}: {val}")
+    for f in body.get("files", []):
+        if not os.path.abspath(f["path"]).startswith(C.UPLOADS):
+            raise ValueError("bad file")
+        sources.append({"type": "file", "path": f["path"], "name": f.get("name")})
+    for p in body.get("paths", []):
+        wp = C.to_wsl(p)
+        if not os.path.exists(wp):
+            raise ValueError(f"File not found: {p}")
+        sources.append({"type": "file", "path": wp, "name": os.path.basename(wp)})
+    if not sources:
+        raise ValueError("Add at least one web address or file.")
+    out_dir = (body.get("output_dir") or "").strip()
+    if not out_dir:
+        raise ValueError("Choose an output folder.")
+    jid = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
+    d = os.path.join(C.JOBS, jid)
+    os.makedirs(d)
+    label = ", ".join((s.get("name") or s.get("id")) for s in sources)
+    from zc import settings
+    st = settings.load()
+    pname = body.get("profile") if body.get("profile") in st["profiles"] else st["active"]
+    prof = st["profiles"][pname]
+    job = {"sources": sources, "mode": body.get("mode", "pictures"), "combine": bool(body.get("combine")),
+           "title": body.get("title", ""), "output_dir": out_dir, "created": time.time(),
+           "label": C.clip(label, 120), "profile": pname, "neutral_names": st["neutral_names"],
+           "quality": prof["quality"], "sensitivity": prof["sensitivity"],
+           # from the watched folder, with "delete each file after its ZIM is made" on
+           "delete_sources": bool(body.get("delete_sources")),
+           "web": {"max_pages": int(body.get("max_pages") or 300),
+                   "scope": body.get("scope") if body.get("scope") in ("section", "page") else "site",
+                   "media": bool(prof.get("web_media")),
+                   # the main screen's checkbox; the profile's setting if the window didn't send one
+                   "scripts": bool(body["scripts"] if "scripts" in body else prof.get("web_scripts"))}}
+    json.dump(job, open(os.path.join(d, "job.json"), "w", encoding="utf-8"))
+    C.Log(d).stage("Waiting in queue", status="queued")
+    with LOCK:
+        QUEUE.append(jid)
+    return jid
+
+
+# ---- watched folder: new files that appear in it become ZIMs, with the active profile's options
+WATCH = {"error": "", "folder": "", "sizes": {}}
+WATCH_STATE = os.path.join(C.HOME, "watch.json")   # what was already there: hashes only, no file names
+PARTIAL = (".crdownload", ".part", ".partial", ".tmp", ".download", ".opdownload", ".aria2", ".!ut")
+
+
+def _file_key(path, st):
+    return hashlib.sha1(f"{path}|{st.st_size}|{int(st.st_mtime)}".encode()).hexdigest()[:20]
+
+
+def watch_once():
+    """One look at the watched folder; queues a job for each finished new file. Called every few seconds."""
+    from zc import formats, settings
+    st = settings.load()
+    w = st["watch"]
+    if not w["on"] or not w["folder"]:
+        WATCH.update(error="", folder="")
+        return []
+    folder = C.to_wsl(w["folder"])
+    if not os.path.isdir(folder):
+        WATCH.update(error=f"The watched folder doesn't exist: {w['folder']}", folder="")
+        return []
+    WATCH.update(error="", folder=w["folder"])
+    fid = hashlib.sha1(os.path.realpath(folder).encode()).hexdigest()[:20]
+    try:
+        state = json.load(open(WATCH_STATE, encoding="utf-8"))
+    except (OSError, ValueError):
+        state = {}
+    names = [n for n in os.listdir(folder) if not n.startswith(".") and not n.lower().endswith(PARTIAL)]
+    files = {}
+    for n in names:
+        p = os.path.join(folder, n)
+        try:
+            s = os.stat(p)
+        except OSError:
+            continue
+        if os.path.isfile(p):
+            files[p] = (n, s, _file_key(p, s))
+    if state.get("folder") != fid:
+        # a newly watched folder: what's already in it stays as it is, only files added from now on are converted
+        state = {"folder": fid, "seen": sorted(k for _, _, k in files.values())}
+        json.dump(state, open(WATCH_STATE, "w", encoding="utf-8"))
+        return []
+    seen, queued = set(state.get("seen", [])), []
+    for p, (n, s, k) in files.items():
+        if k in seen:
+            continue
+        if WATCH["sizes"].get(p) != s.st_size:  # still downloading? wait until its size holds still for a look
+            WATCH["sizes"][p] = s.st_size
+            continue
+        WATCH["sizes"].pop(p, None)
+        seen.add(k)
+        if formats.kind(n) == "unsupported" or n.lower().endswith(".zim"):
+            continue
+        prof = st["profiles"][st["active"]]
+        try:
+            queued.append(new_job({"paths": [p], "mode": prof["mode"], "combine": True, "output_dir": prof["output_dir"],
+                                   "profile": st["active"], "delete_sources": w["delete"]}))
+        except ValueError:
+            pass
+    if queued or len(seen) != len(state.get("seen", [])):
+        state["seen"] = sorted(seen)[-5000:]
+        json.dump(state, open(WATCH_STATE, "w", encoding="utf-8"))
+    return queued
+
+
+def watcher():
+    while True:
+        time.sleep(5)
+        try:
+            watch_once()
+        except Exception as e:  # noqa: BLE001  keep watching
+            WATCH["error"] = f"Watching the folder failed: {e}"
+
+
 def scheduler():
     while True:
         time.sleep(1)
@@ -348,7 +477,8 @@ class H(BaseHTTPRequestHandler):
             ids = sorted(os.listdir(C.JOBS), reverse=True) if os.path.isdir(C.JOBS) else []
             jobs = [j for j in (job_summary(i) for i in ids[:30]) if j]
             self._json({"setup": SETUP, "jobs": jobs, "default_output": DEFAULTS.get("output", ""),
-                        "windows": C.IS_WSL})
+                        "windows": C.IS_WSL, "watch": {"folder": WATCH["folder"], "error": WATCH["error"]},
+                        "downloads": DEFAULTS.get("downloads", "")})
         else:
             self._json({"error": "not found"}, 404)
 
@@ -475,55 +605,10 @@ class H(BaseHTTPRequestHandler):
                     out.append({"input": line, "error": msg})
             return self._json({"items": out})
         if u.path == "/api/jobs":
-            body = self._body()
-            sources = []
-            for line in body.get("links", "").splitlines():
-                if line.strip():
-                    kind, val = classify(line)
-                    if kind == "ia":
-                        sources.append({"type": "ia", "id": val})
-                    elif kind == "web":
-                        sources.append({"type": "web", "url": val, "name": val})
-                    elif kind == "lib":
-                        sources.append({"type": "lib", "url": val, "name": val})
-                    else:
-                        return self._json({"error": f"{line.strip()}: {val}"}, 400)
-            for f in body.get("files", []):
-                if not os.path.abspath(f["path"]).startswith(C.UPLOADS):
-                    return self._json({"error": "bad file"}, 400)
-                sources.append({"type": "file", "path": f["path"], "name": f.get("name")})
-            for p in body.get("paths", []):
-                wp = C.to_wsl(p)
-                if not os.path.exists(wp):
-                    return self._json({"error": f"File not found: {p}"}, 400)
-                sources.append({"type": "file", "path": wp, "name": os.path.basename(wp)})
-            if not sources:
-                return self._json({"error": "Add at least one web address or file."}, 400)
-            out_dir = (body.get("output_dir") or "").strip()
-            if not out_dir:
-                return self._json({"error": "Choose an output folder."}, 400)
-            jid = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
-            d = os.path.join(C.JOBS, jid)
-            os.makedirs(d)
-            label = ", ".join((s.get("name") or s.get("id")) for s in sources)
-            from zc import settings
-            st = settings.load()
-            pname = body.get("profile") if body.get("profile") in st["profiles"] else st["active"]
-            prof = st["profiles"][pname]
-            job = {"sources": sources, "mode": body.get("mode", "pictures"), "combine": bool(body.get("combine")),
-                   "title": body.get("title", ""), "output_dir": out_dir, "created": time.time(),
-                   "label": C.clip(label, 120), "profile": pname, "neutral_names": st["neutral_names"],
-                   "quality": prof["quality"], "sensitivity": prof["sensitivity"],
-                   "web": {"max_pages": int(body.get("max_pages") or 300),
-                           "scope": body.get("scope") if body.get("scope") in ("section", "page") else "site",
-                           "media": bool(prof.get("web_media")),
-                           # the main screen's checkbox; the profile's setting if the window didn't send one
-                           "scripts": bool(body["scripts"] if "scripts" in body else prof.get("web_scripts"))}}
-            json.dump(job, open(os.path.join(d, "job.json"), "w", encoding="utf-8"))
-            C.Log(d).stage("Waiting in queue", status="queued")
-            with LOCK:
-                QUEUE.append(jid)
-            return self._json({"id": jid})
+            try:
+                return self._json({"id": new_job(self._body())})
+            except ValueError as e:
+                return self._json({"error": str(e)}, 400)
         m = re.fullmatch(r"/api/jobs/([\w-]+)/(cancel|delete)", u.path)
         if m:
             jid, act = m.groups()
@@ -594,9 +679,13 @@ def main():
         return
     SERVER["srv"] = srv
     DEFAULTS["output"] = C.default_output()
+    # suggested folder to watch: the user's Downloads
+    DEFAULTS["downloads"] = (C.windows_profile() + "\\Downloads") if C.IS_WSL and C.windows_profile() \
+        else os.path.expanduser("~/Downloads")
     threading.Thread(target=setup_thread, daemon=True).start()
     threading.Thread(target=scheduler, daemon=True).start()
     threading.Thread(target=watchdog, daemon=True).start()
+    threading.Thread(target=watcher, daemon=True).start()
     if private():  # private mode: also catches anything left behind if ZIMaker didn't stop normally last time
         clear_history()
     print(f"ZIMaker is running at http://127.0.0.1:{PORT}", flush=True)

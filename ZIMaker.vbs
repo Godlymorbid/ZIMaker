@@ -34,12 +34,35 @@ If Not IsUp() Then
   WScript.Quit 1
 End If
 
-On Error Resume Next
-sh.Run "msedge.exe --app=" & url & " --window-size=1000,950", 1, False
-If Err.Number <> 0 Then
-  Err.Clear
-  sh.Run url, 1, False   ' no Edge: fall back to the default browser
+' The browser chosen in Settings (written by ZIMaker next to this file). Chromium browsers open ZIMaker in its own
+' app window; Firefox has no app mode, so it gets a new window. If the chosen one isn't installed: Edge, then the
+' default browser.
+Dim browser, app
+browser = "auto"
+If fso.FileExists(dir & "\browser.txt") Then
+  Set f = fso.OpenTextFile(dir & "\browser.txt", 1)
+  If Not f.AtEndOfStream Then browser = LCase(Trim(f.ReadLine))
+  f.Close
 End If
+app = " --app=" & url & " --window-size=1000,950"
+Select Case browser
+  Case "chrome":  If Not Launch("chrome.exe" & app) Then FallBack
+  Case "brave":   If Not Launch("brave.exe" & app) Then FallBack
+  Case "firefox": If Not Launch("firefox.exe -new-window " & url) Then FallBack
+  Case "default": If Not Launch(url) Then FallBack
+  Case Else:      FallBack   ' auto / edge
+End Select
+
+Sub FallBack()
+  If Not Launch("msedge.exe" & app) Then Launch url   ' no Edge: the default browser
+End Sub
+
+Function Launch(cmd)
+  On Error Resume Next
+  sh.Run cmd, 1, False
+  Launch = (Err.Number = 0)
+  Err.Clear
+End Function
 
 Function IsUp()
   On Error Resume Next

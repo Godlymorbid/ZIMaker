@@ -109,6 +109,16 @@ body.dragging #drop{display:flex}
     <button class="swatch" data-c="#c2410c" title="Orange" aria-label="Orange" style="background:#c2410c"></button>
     <label class="hint" style="display:inline-flex;gap:6px;align-items:center">Custom <input type="color" id="s-accent" aria-label="Custom accent color"></label>
   </div>
+  <div style="margin-top:12px"><b>Open ZIMaker in</b></div>
+  <select id="s-browser" aria-label="Browser for ZIMaker's window">
+    <option value="auto">Automatic (Edge on Windows; Chrome, Chromium, Edge or Brave on Linux)</option>
+    <option value="edge">Microsoft Edge</option>
+    <option value="chrome">Google Chrome</option>
+    <option value="brave">Brave</option>
+    <option value="firefox">Firefox</option>
+    <option value="default">My default browser</option>
+  </select>
+  <div class="hint">Used the next time you open ZIMaker. Edge, Chrome and Brave give it a window of its own; Firefox and the default browser open it in an ordinary window. If the browser isn't installed, ZIMaker opens in Edge (or the default browser).</div>
 
   <h3>Updates</h3>
   <label class="opt"><input type="checkbox" id="s-updates"> Check for new versions when ZIMaker opens</label>
@@ -189,6 +199,13 @@ body.dragging #drop{display:flex}
   <label class="opt"><input type="checkbox" id="s-neutral"> Neutral file names
     <small>Name new ZIM files like zim-20261029-1.zim instead of after their title. The title and pages inside still say what the file is, so keep sensitive files in an encrypted folder (see the README).</small></label>
   <div class="row"><button id="clearhist">Clear history now</button><span id="clearmsg" class="hint" aria-live="polite"></span></div>
+
+  <h3>Watched folder</h3>
+  <label class="opt"><input type="checkbox" id="s-watch"> Make a ZIM from every file that appears in a folder
+    <small>For books and pages you download yourself, in any browser (Tor Browser too): point it at the folder your browser saves downloads to. Files already in the folder are left alone; only new ones are converted, with the active profile's options, while ZIMaker is open.</small></label>
+  <div class="row" style="margin-top:4px"><input type="text" id="s-watchdir" aria-label="Folder to watch" placeholder="C:\Users\you\Downloads"></div>
+  <label class="opt"><input type="checkbox" id="s-watchdel"> Delete each file once its ZIM is made
+    <small>Leaves only the ZIM behind (nothing in Downloads says what you fetched). A file is deleted only after its ZIM was saved without errors.</small></label>
 
   <h3>Optional tools</h3>
   <div class="hint">Some file types need an extra program. They come from Ubuntu's own software collection; install them once with the command below.</div>
@@ -278,6 +295,7 @@ body.dragging #drop{display:flex}
   <div class="card">
     <h2>Jobs</h2>
     <div class="hint" id="privnote" style="display:none;margin:-6px 0 6px">Private mode is on: this list and the jobs' logs are deleted when ZIMaker stops.</div>
+    <div class="hint" id="watchnote" style="display:none;margin:-6px 0 6px"></div>
     <div id="jobs"><p class="hint">Nothing yet.</p></div>
   </div>
 
@@ -476,6 +494,8 @@ $("#p-test").onclick = async () => {
     if (r.wsl_hint) $("#p-wslhint").style.display = "block";
   }
 };
+let downloadsDir = "";
+$("#s-watch").onchange = () => { if ($("#s-watch").checked && !$("#s-watchdir").value.trim()) $("#s-watchdir").value = downloadsDir; };
 $("#clearhist").onclick = async () => {
   if (!confirm("Delete the Jobs list (with logs and web addresses), uploaded copies and the list of opened ZIMs?\n\nThe ZIM files you made are not deleted. Jobs still running are kept.")) return;
   const r = await api("/api/history/clear", {method: "POST", body: "{}"}).catch(e => ({error: e.message}));
@@ -565,6 +585,9 @@ $("#opensettings").onclick = () => {
   loadTools();
   $("#s-updates").checked = draft.check_updates;
   showProxy(draft.proxy);
+  $("#s-browser").value = draft.browser || "auto";
+  $("#s-watch").checked = draft.watch.on; $("#s-watchdir").value = draft.watch.folder; $("#s-watchdel").checked = draft.watch.delete;
+  $("#s-watchdir").placeholder = downloadsDir || $("#s-watchdir").placeholder;
   $("#s-private").checked = draft.private;
   $("#s-neutral").checked = draft.neutral_names;
   showDraftProfile();
@@ -608,6 +631,12 @@ $("#savesettings").onclick = async () => {
   readDraftProfile();
   draft.check_updates = $("#s-updates").checked;
   draft.proxy = readProxy();
+  draft.browser = $("#s-browser").value;
+  draft.watch = {on: $("#s-watch").checked, folder: $("#s-watchdir").value.trim(), delete: $("#s-watchdel").checked};
+  if (draft.watch.on && !draft.watch.folder) {
+    $("#settingsmsg").innerHTML = '<span class="err">Enter the folder to watch (or turn the watched folder off).</span>';
+    return;
+  }
   draft.private = $("#s-private").checked;
   draft.neutral_names = $("#s-neutral").checked;
   if (draft.proxy.type !== "off" && (!draft.proxy.host || !draft.proxy.port)) {
@@ -731,6 +760,11 @@ async function poll() {
     const st = s.setup;
     if (st.state === "ready" && !checkedOnce && settings) { checkedOnce = true; if (settings.check_updates) checkUpdate(false); }
     defaultOutput = s.default_output || defaultOutput;
+    downloadsDir = s.downloads || downloadsDir;
+    const wn = $("#watchnote"), w = s.watch || {};
+    wn.style.display = w.folder || w.error ? "block" : "none";
+    wn.innerHTML = w.error ? `<span class="err">${esc(w.error)}</span>`
+      : `Watching <b>${esc(w.folder)}</b>: new files there become ZIMs (⚙ Settings → Watched folder).`;
     $("#setup").style.display = st.state === "ready" ? "none" : "block";
     $("#setup").innerHTML = st.state === "error" ? `<span class="err">${esc(st.message)}</span>`
       : `<b>Getting ready…</b> <span class="hint">${esc(st.message || "")}</span><div class="bar indef"><div></div></div>`;

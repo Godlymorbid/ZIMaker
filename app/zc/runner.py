@@ -185,6 +185,13 @@ def main(job_dir):
             p = s.get("path", "")
             if p.startswith(C.UPLOADS + os.sep):
                 shutil.rmtree(os.path.dirname(p), ignore_errors=True)
+            # from the watched folder with "delete each file after its ZIM is made": only once the ZIM is saved
+            elif job.get("delete_sources") and s.get("type") == "file" and result["files"] and not result["errors"]:
+                try:
+                    os.remove(p)
+                    log(f"deleted {os.path.basename(p)} from the watched folder, as set in Settings")
+                except OSError as e:
+                    log(f"couldn't delete {os.path.basename(p)}: {e}")
 
 
 if __name__ == "__main__":

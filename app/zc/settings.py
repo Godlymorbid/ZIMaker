@@ -17,6 +17,7 @@ QUALITY = {  # image quality presets: (scan width px, scan WebP quality, photo m
     "sharp": (2400, 80, 3200, 90),
 }
 SENSITIVITY = {"more": 8, "balanced": 15, "fewer": 30}  # picture detection: smallest picture cluster
+BROWSERS = ("auto", "edge", "chrome", "brave", "firefox", "default")
 
 CHOICES = {
     "mode": ("pictures", "all", "none"),
@@ -36,6 +37,9 @@ def defaults():
             "proxy": C.clean_proxy({}),   # every download goes through it (see common.net_init)
             "private": False,             # keep no job history or list of opened ZIMs
             "neutral_names": False,       # name new ZIM files zim-<date>-<n>.zim instead of after their title
+            "browser": "auto",            # the app window: auto (Edge on Windows, a Chromium browser on Linux) or a named one
+            # watched folder: files that appear in it are made into ZIMs with the active profile's options
+            "watch": {"on": False, "folder": "", "delete": False},
             "active": "Default", "profiles": {"Default": default_profile()}}
 
 
@@ -68,7 +72,10 @@ def clean(s):
            "accent": accent.lower() if re.fullmatch(r"#[0-9a-fA-F]{6}", accent) else "",  # "" = ZIMaker red
            "check_updates": bool(s.get("check_updates", True)),
            "proxy": C.clean_proxy(s.get("proxy")),
-           "private": bool(s.get("private")), "neutral_names": bool(s.get("neutral_names"))}
+           "private": bool(s.get("private")), "neutral_names": bool(s.get("neutral_names")),
+           "browser": s.get("browser") if s.get("browser") in BROWSERS else "auto"}
+    w = s.get("watch") if isinstance(s.get("watch"), dict) else {}
+    out["watch"] = {"on": bool(w.get("on")), "folder": str(w.get("folder") or "").strip()[:500], "delete": bool(w.get("delete"))}
     profiles = {}
     for name, p in (s.get("profiles") or {}).items():
         name = " ".join(str(name).split())[:40]
@@ -96,6 +103,13 @@ def save(s):
         json.dump(s, f, indent=1)   # owner-only: it can hold a proxy password
     os.replace(tmp, PATH)
     C.net_init(s["proxy"])          # this process uses the new proxy straight away
+    # the Windows launcher (a VBScript) can't read this file inside Linux: give it the browser choice next to itself
+    try:
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                               "browser.txt"), "w", encoding="ascii") as f:
+            f.write(s["browser"] + "\n")
+    except OSError:
+        pass
     return s
 
 
