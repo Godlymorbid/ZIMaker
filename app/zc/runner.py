@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from zc import common as C  # noqa: E402
 
 C.use_lib()
-from zc import builder, deps, formats, ia, media, settings, web  # noqa: E402
+from zc import builder, deps, formats, ia, library, media, settings, web  # noqa: E402
 
 
 def unique(path):
@@ -57,6 +57,9 @@ def main(job_dir):
                     result["errors"].append(f"{s['id']}: {e}")
                     log(result["errors"][-1])
                     continue
+                if not info["books"] and info.get("audio") and not info["restricted"]:
+                    plan.append(("ia-audio", info, None))
+                    continue
                 if not info["books"]:
                     result["errors"].append(f"{s['id']}: no OCR'd book found in this item")
                     log(result["errors"][-1])
@@ -65,6 +68,8 @@ def main(job_dir):
                     plan.append(("ia", info, b))
             elif s["type"] == "web":
                 plan.append(("web", s, None))
+            elif s["type"] == "lib":
+                plan.append(("lib", s, None))
             else:
                 name = s.get("name") or os.path.basename(s["path"])
                 kd = formats.kind(name)
@@ -101,15 +106,21 @@ def main(job_dir):
         for k, (kind, a, b) in enumerate(plan, 1):
             vdir = os.path.join(work, f"v{k}")
             os.makedirs(vdir, exist_ok=True)
-            label = (b["title"] if kind == "ia" else a["url"] if kind == "web"
+            label = (b["title"] if kind == "ia" else a["title"] if kind == "ia-audio" else a["url"] if kind in ("web", "lib")
                      else f"{len(a)} pictures" if kind == "gallery" else f"{len(a)} audio/video files" if kind == "media"
                      else a.get("name") or os.path.basename(a["path"]))
             log.stage(f"Preparing {k}/{len(plan)}: {label}")
             try:
                 if kind == "ia":
                     volumes.append((vdir, ia.prepare(log, a, b, mode, vdir)))
+                elif kind == "ia-audio":
+                    if mode == "none":
+                        raise RuntimeError("this archive.org item is audio, and text-only mode keeps no audio")
+                    volumes.append((vdir, library.archive_audio(log, a["id"], None, vdir, quality)))
                 elif kind == "web":
                     volumes.append((vdir, web.prepare(log, a["url"], job.get("web") or {}, mode, vdir)))
+                elif kind == "lib":
+                    volumes.extend(library.prepare(log, a["url"], mode, vdir, quality))
                 elif kind == "gallery":
                     t = os.path.splitext(os.path.basename(a[0][1]))[0] if len(a) == 1 else f"Pictures ({len(a)})"
                     volumes.append((vdir, formats.prepare_gallery(log, a, t, vdir)))

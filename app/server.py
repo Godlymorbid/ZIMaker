@@ -213,17 +213,20 @@ def zim_search(zid, q, kind):
 
 
 def classify(line):
-    """('ia', item id) | ('web', url) | (None, error message) for one line of the links box."""
-    from zc import ia
+    """('ia', item id) | ('lib', url) | ('web', url) | (None, error message) for one line of the links box."""
+    from zc import ia, library
     s = line.strip()
     if re.match(r"https?://", s, re.I):
         host = urllib.parse.urlsplit(s).netloc.lower()
         if host.endswith("archive.org") and ia.item_id(s):
             return "ia", ia.item_id(s)
+        if library.detect(s):   # Gutenberg, Standard Ebooks, Wikisource, OpenStax, LibriVox, IIIF (or a blocked library)
+            return "lib", s
         return "web", s
     # bare text: a domain like example.com/page is a website; anything else an archive.org item ID
     if re.fullmatch(r"[\w-]+(\.[\w-]+)*\.[A-Za-z]{2,24}(/\S*)?", s) and not s.lower().startswith("archive.org"):
-        return "web", "https://" + s
+        url = ("http://" if C.is_onion("http://" + s) else "https://") + s   # onion sites rarely use https
+        return ("lib" if library.detect(url) else "web"), url
     if s.lower().startswith("archive.org/") and ia.item_id("https://" + s):
         return "ia", ia.item_id("https://" + s)
     if ia.item_id(s):
@@ -450,10 +453,15 @@ class H(BaseHTTPRequestHandler):
                     if kind == "ia":
                         info = ia.inspect(val)
                         err = ("Borrow-only item: archive.org doesn't allow downloading it" if info["restricted"]
-                               else "" if info["books"] else "No OCR text in this item")
+                               else "" if info["books"] or info.get("audio") else "No OCR text in this item")
+                        if not info["books"] and info.get("audio") and not err:
+                            info["title"] += " (audiobook)"
                         out.append({"input": line, "kind": "ia", "title": info["title"], "error": err,
                                     "books": [{"title": b["title"], "scans_gb": round(b["archive_size"] / 1e9, 2)}
                                               for b in info["books"]]})
+                    elif kind == "lib":
+                        from zc import library
+                        out.append({"input": line, "kind": "lib", "title": library.describe(val), "error": ""})
                     elif kind == "web":
                         p = web.peek(val)
                         err = "" if p["html"] else "This address isn't a web page"
@@ -476,6 +484,8 @@ class H(BaseHTTPRequestHandler):
                         sources.append({"type": "ia", "id": val})
                     elif kind == "web":
                         sources.append({"type": "web", "url": val, "name": val})
+                    elif kind == "lib":
+                        sources.append({"type": "lib", "url": val, "name": val})
                     else:
                         return self._json({"error": f"{line.strip()}: {val}"}, 400)
             for f in body.get("files", []):

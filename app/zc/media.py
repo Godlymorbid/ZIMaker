@@ -73,7 +73,10 @@ def _srt_to_vtt(src, dst):
 
 def prepare(log, items, title, vdir, quality="balanced", subtitles=()):
     """items: [(path, display name)]; subtitles: [(path, name)] matched to videos by file name."""
-    ff = tools.need("ffmpeg", "Audio and video")
+    # MP3s are only copied, so they need no FFmpeg (an audiobook from LibriVox, say); it just adds length and cover art
+    ff = tools.find("ffmpeg", "ffmpeg")
+    if not ff and not all(n.lower().endswith(".mp3") for _, n in items):
+        ff = tools.need("ffmpeg", "Audio and video")
     max_h, crf, kbps = PRESETS.get(quality, PRESETS["balanced"])
     os.makedirs(os.path.join(vdir, "media"), exist_ok=True)
     subs = {}
@@ -87,7 +90,7 @@ def prepare(log, items, title, vdir, quality="balanced", subtitles=()):
         stem = os.path.splitext(os.path.basename(name))[0]
         ext = os.path.splitext(name)[1].lower()
         try:
-            info = probe(path)
+            info = probe(path) if ff else {"streams": [{"codec_type": "audio"}], "format": {}}  # MP3 without FFmpeg
         except Exception as e:  # noqa: BLE001
             log(f"skipped {name}: {e}")
             continue
@@ -133,8 +136,9 @@ def prepare(log, items, title, vdir, quality="balanced", subtitles=()):
                 _run(log, [ff, "-y", "-i", path, "-map", "0:a:0", "-vn", "-c:a", "libmp3lame", "-b:a", f"{kbps}k",
                            os.path.join(vdir, base + ".mp3")], dur, name)
             cover = base + ".jpg"
-            subprocess.run([ff, "-y", "-i", path, "-an", "-map", "0:v:0?", "-frames:v", "1", "-vf", "scale='min(800,iw)':-2",
-                            "-loglevel", "error", os.path.join(vdir, cover)], capture_output=True, timeout=120)
+            if ff:
+                subprocess.run([ff, "-y", "-i", path, "-an", "-map", "0:v:0?", "-frames:v", "1", "-vf", "scale='min(800,iw)':-2",
+                                "-loglevel", "error", os.path.join(vdir, cover)], capture_output=True, timeout=120)
             media = {"file": base + ".mp3", "mime": "audio/mpeg", "kind": "audio",
                      "poster": cover if os.path.exists(os.path.join(vdir, cover)) and os.path.getsize(os.path.join(vdir, cover)) else None,
                      "tracks": []}

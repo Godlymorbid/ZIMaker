@@ -122,7 +122,9 @@ The viewer shows the ZIM's pages without running their scripts, so a ZIM from an
 | Kind | Formats | What you get |
 |---|---|---|
 | Websites | any http/https address | the site's pages with their styles, fonts and images (without their scripts, unless the profile keeps them); a list of all saved pages |
-| archive.org books | item links or IDs | OCR text of every page, with printed page numbers and running heads; scans of illustrated pages |
+| archive.org books | item links or IDs | OCR text of every page, with printed page numbers and running heads; scans of illustrated pages. Audio items (e.g. LibriVox recordings) become audiobooks |
+| Online libraries | a link to a book's page | **Project Gutenberg** and **Standard Ebooks**: the book's EPUB, with illustrations. **Wikisource**: the work, via Wikisource's EPUB export. **OpenStax**: the textbook's PDF. **LibriVox**: the audiobook (MP3 chapters, no FFmpeg needed), plus the book's text when LibriVox links it on Project Gutenberg |
+| IIIF libraries | a IIIF manifest link | page scans, with text where the library provides it. Works with many museums and libraries: the Wellcome Collection, Oxford's Bodleian, Stanford, Princeton, e-codices and more |
 | Ebooks | EPUB, MOBI, AZW, AZW3, FB2 | the book's own chapters, styles and images, plus a contents page and Previous/Next links |
 | Documents | DOCX, ODT, RTF, PPTX, XLSX, CSV, TSV, Markdown, HTML, Jupyter notebooks, LaTeX, reStructuredText, Org, AsciiDoc, Typst, MediaWiki, Textile, txt2tags, Muse, POD, Creole, Djot | converted with Pandoc: split into chapters at headings, with a contents page and the document's pictures |
 | Older and other office files ¹ | DOC, XLS, PPT, PPS, WPD, WPS, ABW, HWP, ODS, ODP, ODG, Visio, Publisher, StarOffice and macro/template variants | converted with LibreOffice first, then as above (slides and drawings become pages) |
@@ -137,6 +139,8 @@ The viewer shows the ZIM's pages without running their scripts, so a ZIM from an
 | Help files ¹ | CHM | the help pages as a website |
 
 ¹ Needs an optional tool (below).
+
+**Libraries that block automated tools:** the Library of Congress, Gallica, the Biodiversity Heritage Library and HathiTrust put their sites behind "checking your browser" pages (Cloudflare). ZIMaker doesn't try to get around that. It says so, and you can download the book in your browser and add the file instead. Many of the same books are also on archive.org.
 
 **Not supported:**
 
@@ -197,6 +201,8 @@ Two rules, on purpose:
 
 Or run Tor inside WSL instead (`sudo apt install tor`), and use **Tor service**. Where Tor itself is blocked, Tor Browser's built-in bridges (Snowflake, obfs4) or Psiphon usually still get through.
 
+**Onion sites:** with **Tor Browser** or **Tor service** set as the proxy, ZIMaker can also save `.onion` sites. Paste the address like any other; one without `http://` gets it added. Without a SOCKS5 proxy, ZIMaker refuses onion addresses outright. Over an ordinary connection, or a proxy that isn't Tor, the address would leak to your network's DNS server or to the proxy. Through Tor, the name is looked up inside Tor. Tor is slow, so ZIMaker uses longer timeouts, makes fewer requests at once, and retries when a Tor circuit drops. Expect onion sites to take much longer than ordinary ones.
+
 Using Tor or a VPN is itself illegal or watched in some countries, and a well-equipped state can often tell that you're using one, even when it can't see what you're reading.
 
 ### Leaving fewer traces
@@ -256,6 +262,7 @@ An encrypted container doesn't help while it's open, and some places force peopl
     - `web.py`: websites.
     - `epub.py`, `pdf.py`, `formats.py`: files.
     - `media.py`: audio and video.
+    - `library.py`: Project Gutenberg, Standard Ebooks, Wikisource, OpenStax, LibriVox and IIIF.
     - `emails.py`: EML and MBOX.
     - `tools.py`: finds the optional tools.
     - `settings.py`: settings and profiles.

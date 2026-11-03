@@ -76,6 +76,8 @@ def inspect(ident, timeout=25):
         "language": C.lang3(md.get("language")),
         "restricted": restricted,
         "books": [b for b in books if b["has_index"]],
+        # an audio item (a LibriVox recording, say): no book, but chapters that make an audiobook
+        "audio": any(n.lower().endswith(".mp3") for n in files),
     }
 
 

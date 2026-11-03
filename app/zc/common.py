@@ -182,10 +182,37 @@ class _Refuse(urllib.request.BaseHandler):
     https_open = http_open
 
 
+ONION_NEEDS_TOR = ("This is a Tor onion site, which can only be reached through Tor. In ⚙ Settings → Connection and "
+                   "privacy, choose Tor Browser or Tor service (Tor must be running), then try again.")
+
+
+def is_onion(url_or_host):
+    host = urllib.parse.urlsplit(url_or_host).hostname if "//" in url_or_host else url_or_host
+    return bool(host) and host.lower().rstrip(".").endswith(".onion")
+
+
+def onion_ok():
+    """Onion sites only through a SOCKS5 proxy: it looks the name up inside Tor. Anything else would send the
+    .onion name to an ordinary DNS server or proxy, telling them which onion site was asked for."""
+    return bool(PROXY) and PROXY["type"] == "socks5" and not _proxy_problem(PROXY)
+
+
+class _NoOnion(urllib.request.BaseHandler):
+    """Without a SOCKS5 proxy, refuse .onion addresses before any connection (or DNS lookup) is made."""
+    handler_order = 90
+
+    def _check(self, req):
+        if is_onion(req.host or ""):
+            raise urllib.error.URLError(ONION_NEEDS_TOR)
+        return None
+
+    http_open = https_open = _check
+
+
 def proxy_opener(p):
     """A urllib opener that sends everything through proxy p (and nothing around it)."""
     if p["type"] == "off":
-        return urllib.request.build_opener()
+        return urllib.request.build_opener(_NoOnion())
     why = _proxy_problem(p)
     if why:
         return urllib.request.build_opener(_Refuse(why))
@@ -193,7 +220,7 @@ def proxy_opener(p):
         login = (urllib.parse.quote(p["user"], safe="") + ":" + urllib.parse.quote(p["password"], safe="") + "@"
                  if p["user"] else "")
         url = f"http://{login}{p['host']}:{p['port']}"
-        return urllib.request.build_opener(urllib.request.ProxyHandler({"http": url, "https": url}), _Refuse())
+        return urllib.request.build_opener(urllib.request.ProxyHandler({"http": url, "https": url}), _Refuse(), _NoOnion())
     return urllib.request.build_opener(urllib.request.ProxyHandler({}), _SocksHandler(p), _SocksHTTPSHandler(p),
                                        _Refuse())
 
@@ -279,7 +306,9 @@ def download(url, dest, log=None, label="", size=0):
         return dest
     if PROXY and _proxy_problem(PROXY):
         raise RuntimeError(f"The proxy can't be used: {_proxy_problem(PROXY)}. Check ⚙ Settings → Connection and privacy.")
-    if not shutil.which("curl"):
+    if is_onion(url) and not onion_ok():
+        raise RuntimeError(ONION_NEEDS_TOR)
+    if not shutil.which("curl") or is_onion(url):  # onion: Python's SOCKS code (it never resolves names locally)
         _download_py(url, dest, log, label, size)
         open(dest + ".ok", "w").close()
         return dest

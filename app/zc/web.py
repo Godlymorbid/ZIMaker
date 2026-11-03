@@ -7,6 +7,7 @@ honoured, to keep crawls polite. Sites that build their pages with JavaScript wo
 """
 import hashlib
 import html
+import json
 import mimetypes
 import os
 import posixpath
@@ -190,6 +191,11 @@ class Site:
             raise RuntimeError("Not a web address (it must start with http:// or https://)")
         s = urllib.parse.urlsplit(self.start)
         host = s.netloc
+        # Tor onion sites: only through Tor (checked before anything is fetched), and Tor is slow and its circuits
+        # sometimes drop, so longer timeouts, fewer requests at once, and a few retries
+        self.onion = C.is_onion(self.start)
+        if self.onion and not offline and not C.onion_ok():
+            raise RuntimeError(C.ONION_NEEDS_TOR)
         self.hosts = {host, host[4:] if host.startswith("www.") else "www." + host}
         self.prefix = s.path[: s.path.rfind("/") + 1] if scope == "section" else "/"
         self.max_pages = max_pages
@@ -216,7 +222,8 @@ class Site:
     # ---------------------------------------------------------------- fetching
     def _get(self, url, small=False):
         req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
-        with urllib.request.urlopen(req, timeout=20 if small else 45) as r:
+        timeout = (60 if small else 120) if self.onion else (20 if small else 45)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             ctype = r.headers.get_content_type()
             limit = MAX_AV if self.include_av and ctype.split("/")[0] in ("video", "audio") else MAX_FILE
             n = int(r.headers.get("Content-Length") or 0)
@@ -246,7 +253,11 @@ class Site:
                 self.slowed = True
                 time.sleep(min(max(wait, 5 * (attempt + 1)), 60))
             except Exception as e:  # noqa: BLE001
-                return url, e
+                # through Tor a circuit can fail ("host unreachable", time-outs): wait and try a new one
+                if not (self.onion and isinstance(e, (urllib.error.URLError, TimeoutError, OSError))) or attempt == 3 \
+                        or "onion site, which can only" in str(e):
+                    return url, e
+                time.sleep(5 * (attempt + 1))
         return url, RuntimeError("gave up")
 
     def in_scope(self, url):
@@ -399,7 +410,7 @@ class Site:
         log = self.log
         pages, queued, assets = deque([self.start]), {self.start}, set()
         n_pages = 0
-        with ThreadPoolExecutor(1 if self.delay else 4) as pool:
+        with ThreadPoolExecutor(1 if self.delay else 2 if self.onion else 4) as pool:
             while pages and n_pages < self.max_pages:
                 batch = [pages.popleft() for _ in range(min(8, len(pages)))]
                 for url, res in pool.map(self.fetch, batch):
@@ -505,6 +516,15 @@ def peek(url):
 
 
 def prepare(log, url, opts, mode, vdir):
+    # a IIIF manifest whose address doesn't say "manifest" (e.g. Wellcome's): treat it as the book it describes
+    if re.search(r"iiif|presentation", url, re.I) and not C.is_onion(url):
+        try:
+            m = C.get_json(url, timeout=30)
+        except Exception:  # noqa: BLE001  not JSON: an ordinary website
+            m = None
+        if isinstance(m, dict) and "iiif.io" in json.dumps(m.get("@context", "")) and ("sequences" in m or "items" in m):
+            from . import library
+            return library.iiif(log, url, mode, vdir)
     scope = opts.get("scope", "site")
     max_pages = 1 if scope == "page" else max(1, min(int(opts.get("max_pages") or 300), 50000))
     site = Site(log, url, max_pages, scope, mode, vdir, include_av=bool(opts.get("media")),
@@ -513,6 +533,8 @@ def prepare(log, url, opts, mode, vdir):
         log("keeping the site's audio and video (formats readers can play, up to 500 MB each)")
     log("keeping the site's JavaScript (it runs in Kiwix)" if site.keep_scripts
         else "saving pages without their JavaScript, as they look in ZIMaker's preview")
+    if site.onion:
+        log("onion site: everything goes through Tor, which is slow; expect this to take a while")
     log(f"[{site.start}] " + ("saving just this page" if scope == "page" else f"saving up to {max_pages} pages"
                               + (f" under {site.prefix}" if scope == "section" else "")))
     n = site.crawl()

@@ -311,6 +311,8 @@ $("#check").onclick = async () => {
     const {items} = await api("/api/inspect", {method:"POST", body: JSON.stringify({text})});
     $("#found").innerHTML = items.map(it => it.error
       ? `<li><span>${esc(it.input)}</span><span class="err">${esc(it.error)}</span></li>`
+      : it.kind === "lib"
+      ? `<li><span><b>${esc(it.title)}</b><br><span class="hint">${esc(it.input)}</span></span><span class="good">ready</span></li>`
       : it.kind === "web"
       ? `<li><span><b>${esc(it.title)}</b><br><span class="hint">${esc(it.input)}</span></span>
          <span class="hint">website · ${document.querySelector("input[name=scope]:checked").value === "page" ? "this page only" : `up to ${esc($("#maxpages").value)} pages`}</span></li>`
