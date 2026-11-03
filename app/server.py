@@ -28,8 +28,8 @@ QUEUE = []
 LOCK = threading.Lock()
 SEEN = {"t": time.time() + 90}  # last time the window polled; grace period while it first opens
 STARTED = time.time()           # lets the window notice when an updated server has taken over
-IDLE_EXIT = 150                 # seconds without a window (and no job) before the app stops itself;
-                                # a minimised window may only poll once a minute
+IDLE_EXIT = 150                 # default seconds without a window (and no job) before the app stops itself (Settings
+                                # can change it); not less: a minimised window may only poll once a minute
 SERVER = {}
 
 
@@ -38,10 +38,16 @@ def busy():
 
 
 def watchdog():
-    """Stop when the window has been closed and no job is running or queued."""
+    """Stop when the window has been closed for the time set in Settings and no job is running or queued
+    (never, with "Keep running")."""
+    from zc import settings
     while True:
         time.sleep(5)
-        if time.time() - SEEN["t"] > IDLE_EXIT and not busy() and SETUP["state"] != "installing":
+        try:
+            limit = settings.load()["stop_after"]
+        except Exception:  # noqa: BLE001
+            limit = IDLE_EXIT
+        if limit and time.time() - SEEN["t"] > limit and not busy() and SETUP["state"] != "installing":
             print("Window closed and nothing running: stopping ZIMaker.", flush=True)
             SERVER["srv"].shutdown()
             return

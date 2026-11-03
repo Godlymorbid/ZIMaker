@@ -55,7 +55,7 @@ Requirements: Python 3.9 or newer, which most distributions include, on a 64-bit
   - You can also double-click `ZIMaker.vbs` in the install folder.
 - **Linux:** open **ZIMaker** from your applications menu, or run `zimaker`.
 
-**Stopping:** close the window, and ZIMaker stops by itself about 2–3 minutes later. If a conversion is still running, it finishes the conversion first and then stops. The **Quit** button stops it straight away; it asks first if a conversion is running.
+**Stopping:** close the window, and ZIMaker stops by itself about 2½ minutes later. You can change that in **⚙ Settings → When the window is closed**: 10 minutes, 30 minutes, 1 hour, 4 hours, or never (keep running, handy with a watched folder). If a conversion is still running or waiting, it finishes first and then stops. The **Quit** button stops it straight away; it asks first if a conversion is running.
 
 ## Settings
 

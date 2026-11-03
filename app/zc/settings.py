@@ -18,6 +18,7 @@ QUALITY = {  # image quality presets: (scan width px, scan WebP quality, photo m
 }
 SENSITIVITY = {"more": 8, "balanced": 15, "fewer": 30}  # picture detection: smallest picture cluster
 BROWSERS = ("auto", "edge", "chrome", "brave", "firefox", "default")
+STOP_AFTER = (150, 600, 1800, 3600, 4 * 3600, 0)   # seconds without a window before ZIMaker stops itself; 0 = never
 
 CHOICES = {
     "mode": ("pictures", "all", "none"),
@@ -38,6 +39,7 @@ def defaults():
             "private": False,             # keep no job history or list of opened ZIMs
             "neutral_names": False,       # name new ZIM files zim-<date>-<n>.zim instead of after their title
             "browser": "auto",            # the app window: auto (Edge on Windows, a Chromium browser on Linux) or a named one
+            "stop_after": 150,            # stop this long after the last window closed (and no job), 0 = keep running
             # watched folder: files that appear in it are made into ZIMs with the active profile's options
             "watch": {"on": False, "folder": "", "delete": False},
             "active": "Default", "profiles": {"Default": default_profile()}}
@@ -73,7 +75,8 @@ def clean(s):
            "check_updates": bool(s.get("check_updates", True)),
            "proxy": C.clean_proxy(s.get("proxy")),
            "private": bool(s.get("private")), "neutral_names": bool(s.get("neutral_names")),
-           "browser": s.get("browser") if s.get("browser") in BROWSERS else "auto"}
+           "browser": s.get("browser") if s.get("browser") in BROWSERS else "auto",
+           "stop_after": s.get("stop_after") if s.get("stop_after") in STOP_AFTER else 150}
     w = s.get("watch") if isinstance(s.get("watch"), dict) else {}
     out["watch"] = {"on": bool(w.get("on")), "folder": str(w.get("folder") or "").strip()[:500], "delete": bool(w.get("delete"))}
     profiles = {}

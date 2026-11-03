@@ -120,6 +120,18 @@ body.dragging #drop{display:flex}
   </select>
   <div class="hint">Used the next time you open ZIMaker. Edge, Chrome and Brave give it a window of its own; Firefox and the default browser open it in an ordinary window. If the browser isn't installed, ZIMaker opens in Edge (or the default browser).</div>
 
+  <h3>When the window is closed</h3>
+  <div class="row" style="margin-top:4px">Stop ZIMaker
+    <select id="s-stopafter" aria-label="When to stop ZIMaker after its window is closed">
+      <option value="150">after 2½ minutes</option>
+      <option value="600">after 10 minutes</option>
+      <option value="1800">after 30 minutes</option>
+      <option value="3600">after 1 hour</option>
+      <option value="14400">after 4 hours</option>
+      <option value="0">never (keep running)</option>
+    </select></div>
+  <div class="hint">A conversion that is running or waiting always finishes first. While ZIMaker keeps running, it opens instantly and the watched folder keeps working; <b>Quit</b> stops it straight away.</div>
+
   <h3>Updates</h3>
   <label class="opt"><input type="checkbox" id="s-updates"> Check for new versions when ZIMaker opens</label>
   <div class="row"><button id="s-checknow">Check for updates now</button><span id="s-updmsg" class="hint" aria-live="polite"></span></div>
@@ -586,6 +598,7 @@ $("#opensettings").onclick = () => {
   $("#s-updates").checked = draft.check_updates;
   showProxy(draft.proxy);
   $("#s-browser").value = draft.browser || "auto";
+  $("#s-stopafter").value = String(draft.stop_after ?? 150);
   $("#s-watch").checked = draft.watch.on; $("#s-watchdir").value = draft.watch.folder; $("#s-watchdel").checked = draft.watch.delete;
   $("#s-watchdir").placeholder = downloadsDir || $("#s-watchdir").placeholder;
   $("#s-private").checked = draft.private;
@@ -632,6 +645,7 @@ $("#savesettings").onclick = async () => {
   draft.check_updates = $("#s-updates").checked;
   draft.proxy = readProxy();
   draft.browser = $("#s-browser").value;
+  draft.stop_after = parseInt($("#s-stopafter").value, 10);
   draft.watch = {on: $("#s-watch").checked, folder: $("#s-watchdir").value.trim(), delete: $("#s-watchdel").checked};
   if (draft.watch.on && !draft.watch.folder) {
     $("#settingsmsg").innerHTML = '<span class="err">Enter the folder to watch (or turn the watched folder off).</span>';
