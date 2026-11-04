@@ -98,15 +98,17 @@ If an update doesn't finish, close the window and open ZIMaker again. The log is
    - Or paste **web addresses**, one per line: any website, or archive.org books. Click **Check links** to see what each one is.
    - Or click **Choose files…**. For a very large file, paste its path under "Use its path instead" so it isn't copied.
    - You can mix websites, books and files in one job.
-2. **Page images**
-   - **Only pages with pictures** (the default): for scanned books, every page is text, and the original scan is shown only on pages with an illustration, map, diagram or plate.
-   - **Every page as an image**: the scan of every page, with its text underneath.
-   - **Text only**: no images anywhere.
-3. **Websites**: how many pages to save at most (300 by default), and whether to save the whole site or only the section you linked to.
-4. **Output**: one ZIM per book, document or site, or **combine** everything into one ZIM with a home page and search across all of it.
-5. Optionally set a **Title**, choose the **Save to folder** (a Proton Drive folder works), and click **Build ZIM**.
+2. Pick a **Profile** and a **Save to folder** (a Proton Drive folder works), and click **Build ZIM**. That's all most jobs need.
+3. **More options** (folded away; its summary line shows what's set, and it stays open or closed as you leave it):
+   - **Page images:**
+     - **Only pages with pictures** (the default): for scanned books, every page is text, and the original scan is shown only on pages with an illustration, map, diagram or plate.
+     - **Every page as an image**: the scan of every page, with its text underneath.
+     - **Text only**: no images anywhere.
+   - **Websites:** how many pages to save at most (300 by default), whether to save the whole site or only the section you linked to, and whether to keep the site's JavaScript.
+   - **Output:** one ZIM per book, document or site, or **combine** everything into one ZIM with a home page and search across all of it.
+   - **Title:** for a combined or single file.
 
-Jobs run one at a time. The Jobs list shows progress, a log, and **Preview** and **Open folder** buttons when a job is done. Every file is checked with openZIM's `zimcheck` before it's saved.
+Jobs run one at a time. The Jobs list shows progress, a log, and **Preview** and **Open folder** buttons when a job is done. **Run again** (or **Retry**, after a failure) starts a job over with the same files and options. The window's title shows the progress, and a desktop notification tells you when a job finishes, so you can work in other windows meanwhile (turn it off in **⚙ Settings → Notifications**). Every file is checked with openZIM's `zimcheck` before it's saved.
 
 ## Watched folder
 

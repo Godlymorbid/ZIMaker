@@ -71,6 +71,8 @@ pre{white-space:pre-wrap;font-size:12px;max-height:260px;overflow:auto;backgroun
 .status{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
 #setup{display:none}
 details summary{cursor:pointer;color:var(--mute);font-size:13px}
+#more>summary{font-size:15px;padding:6px 0}
+#more[open]>summary #moresum{display:none}
 header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
 #drop{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:10;
   background:color-mix(in srgb,var(--bg) 85%,transparent);border:4px dashed var(--acc);font-size:22px;font-weight:600;color:var(--acc);text-align:center;padding:20px}
@@ -119,6 +121,10 @@ body.dragging #drop{display:flex}
     <option value="default">My default browser</option>
   </select>
   <div class="hint">Used the next time you open ZIMaker. Edge, Chrome and Brave give it a window of its own; Firefox and the default browser open it in an ordinary window. If the browser isn't installed, ZIMaker opens in Edge (or the default browser).</div>
+
+  <h3>Notifications</h3>
+  <label class="opt"><input type="checkbox" id="s-notify"> Tell me when a job finishes
+    <small>A desktop notification, so you can work in other windows meanwhile (the browser asks once whether ZIMaker may show them). In private mode it doesn't name the book.</small></label>
 
   <h3>When the window is closed</h3>
   <div class="row" style="margin-top:4px">Stop ZIMaker
@@ -273,7 +279,9 @@ body.dragging #drop{display:flex}
     <div class="profile-row"><b>Profile</b> <select id="profile"></select>
       <button id="saveprofile" title="Make the options below this profile's defaults">Save options to profile</button>
       <span class="hint" id="profilemsg"></span></div>
-    <div class="hint" style="margin:4px 0 10px">The options below start from the profile. Change them here for one job, or edit profiles in ⚙ Settings.</div>
+    <details id="more" style="margin-top:10px">
+    <summary><b style="color:var(--ink)">More options</b> <span class="hint" id="moresum"></span></summary>
+    <div class="hint" style="margin:6px 0 10px">These start from the profile. Change them here for one job, or edit profiles in ⚙ Settings.</div>
     <div><b>Page images</b></div>
     <label class="opt"><input type="radio" name="mode" value="pictures" checked> Only pages with pictures
       <small>Text on every page; the scan is shown only where there's an illustration, map or plate. Small files.</small></label>
@@ -298,7 +306,8 @@ body.dragging #drop{display:flex}
       <small>One file with a home page listing every book, and search across all of them.</small></label>
     <div style="margin-top:10px"><b>Title</b> <span class="hint">(optional; used for a combined or single file)</span></div>
     <input type="text" id="title" placeholder="Leave blank to use the book's own title">
-    <div style="margin-top:10px"><b>Save to folder</b></div>
+    </details>
+    <div style="margin-top:12px"><b>Save to folder</b></div>
     <input type="text" id="outdir">
     <div class="hint">Tip: a Proton Drive or OneDrive folder works too.</div>
     <div class="row" style="margin-top:16px"><button class="primary" id="build">Build ZIM</button><span id="buildmsg" class="hint"></span></div>
@@ -308,6 +317,7 @@ body.dragging #drop{display:flex}
     <h2>Jobs</h2>
     <div class="hint" id="privnote" style="display:none;margin:-6px 0 6px">Private mode is on: this list and the jobs' logs are deleted when ZIMaker stops.</div>
     <div class="hint" id="watchnote" style="display:none;margin:-6px 0 6px"></div>
+    <div id="jobsmsg" aria-live="polite"></div>
     <div id="jobs"><p class="hint">Nothing yet.</p></div>
   </div>
 
@@ -536,6 +546,7 @@ function applyProfile(name) {
   radio("mode", p.mode); radio("combine", p.combine ? "1" : "0"); radio("scope", p.scope);
   $("#maxpages").value = p.max_pages; $("#outdir").value = p.output_dir;
   $("#webscripts").checked = !!p.web_scripts;
+  updateMoreSum();
 }
 async function loadSettings() {
   settings = await api("/api/settings");
@@ -600,6 +611,7 @@ $("#opensettings").onclick = () => {
   showProxy(draft.proxy);
   $("#s-browser").value = draft.browser || "auto";
   $("#s-stopafter").value = String(draft.stop_after ?? 150);
+  $("#s-notify").checked = draft.notify !== false;
   $("#s-watch").checked = draft.watch.on; $("#s-watchdir").value = draft.watch.folder; $("#s-watchdel").checked = draft.watch.delete;
   $("#s-watchdir").placeholder = downloadsDir || $("#s-watchdir").placeholder;
   $("#s-private").checked = draft.private;
@@ -647,6 +659,8 @@ $("#savesettings").onclick = async () => {
   draft.proxy = readProxy();
   draft.browser = $("#s-browser").value;
   draft.stop_after = parseInt($("#s-stopafter").value, 10);
+  draft.notify = $("#s-notify").checked;
+  if (draft.notify && "Notification" in window && Notification.permission === "default") Notification.requestPermission();
   draft.watch = {on: $("#s-watch").checked, folder: $("#s-watchdir").value.trim(), delete: $("#s-watchdel").checked};
   if (draft.watch.on && !draft.watch.folder) {
     $("#settingsmsg").innerHTML = '<span class="err">Enter the folder to watch (or turn the watched folder off).</span>';
@@ -687,6 +701,7 @@ $("#build").onclick = async () => {
     profile: settings ? settings.active : undefined,
   };
   if (files.some(f => f.state === "uploading")) { $("#buildmsg").textContent = "Wait for uploads to finish."; return; }
+  askToNotify();
   $("#build").disabled = true; $("#buildmsg").textContent = "";
   try {
     await api("/api/jobs", {method: "POST", body: JSON.stringify(body)});
@@ -713,8 +728,50 @@ function jobHtml(j) {
     ${running ? `<div class="bar ${pct === null ? "indef" : ""}"><div style="width:${pct ?? 30}%"></div></div>` : ""}
     ${fileList ? `<ul class="items">${fileList}</ul>` : ""}${errs}
     <details ${openLogs.has(j.id) ? "open" : ""} data-log="${j.id}"><summary>Log</summary><pre>${esc(j.log)}</pre></details>
-    <div class="row">${running ? `<button class="cancel" data-id="${j.id}">Cancel</button>` : `<button class="del" data-id="${j.id}">Remove from list</button>`}</div>
+    <div class="row">${running ? `<button class="cancel" data-id="${j.id}">Cancel</button>`
+      : `<button class="rerun" data-id="${j.id}">${j.status === "done" ? "Run again" : "Retry"}</button>
+         <button class="del" data-id="${j.id}">Remove from list</button>`}</div>
   </div>`;
+}
+
+// ---- "More options": a one-line summary while it's folded away (and it stays open or closed as you left it)
+function updateMoreSum() {
+  const mode = {pictures: "only pages with pictures", all: "every page as an image", none: "text only"}[radioVal("mode")];
+  const scope = radioVal("scope") === "page" ? "websites: just the page"
+    : `websites: ${radioVal("scope") === "section" ? "the section" : "whole site"}, up to ${$("#maxpages").value || 300} pages`;
+  const parts = [mode, scope, radioVal("combine") === "1" ? "combined into one ZIM" : "one ZIM per book"];
+  if ($("#webscripts").checked) parts.push("keeping JavaScript");
+  if ($("#title").value.trim()) parts.push(`title “${$("#title").value.trim()}”`);
+  $("#moresum").textContent = "· " + parts.join(" · ");
+}
+$("#more").addEventListener("input", updateMoreSum);
+$("#more").addEventListener("change", updateMoreSum);
+try { if (localStorage.getItem("moreOpen") === "1") $("#more").open = true; } catch (e) {}
+$("#more").addEventListener("toggle", () => { try { localStorage.setItem("moreOpen", $("#more").open ? "1" : "0"); } catch (e) {} });
+
+// ---- finished jobs: a desktop notification (so you can work in other windows), progress in the window title
+const lastStatus = {};
+function notifyFinished(j) {
+  if (!settings || !settings.notify || !("Notification" in window) || Notification.permission !== "granted") return;
+  const ok = j.status === "done";
+  // private mode: Windows keeps notifications in its history, so they don't say which book
+  const what = settings.private ? (ok ? "Your ZIM is ready." : "A job didn't finish.") : j.label;
+  const n = new Notification(ok ? "ZIM ready" : "ZIMaker: job failed", {body: what, tag: j.id, icon: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%237a1f1f'/%3E%3C/svg%3E"});
+  n.onclick = () => { window.focus(); n.close(); };
+}
+function trackJobs(jobs) {
+  for (const j of jobs) {
+    const before = lastStatus[j.id];
+    if ((before === "running" || before === "queued") && ["done", "failed", "interrupted"].includes(j.status)) notifyFinished(j);
+    lastStatus[j.id] = j.status;
+  }
+  const run = jobs.find(j => j.status === "running");
+  const pct = run && run.total ? Math.min(100, Math.round(100 * run.done / run.total)) : null;
+  const queued = jobs.filter(j => j.status === "queued").length;
+  document.title = run ? `${pct !== null ? pct + "%" : "Working…"}${queued ? ` (+${queued} waiting)` : ""} · ZIMaker` : "ZIMaker";
+}
+function askToNotify() {  // asked once, when you first start a job (a browser only allows asking after a click)
+  if (settings && settings.notify && "Notification" in window && Notification.permission === "default") Notification.requestPermission();
 }
 
 // ---- updates from GitHub
@@ -786,6 +843,13 @@ async function poll() {
     if (!$("#outdir").value && s.default_output) $("#outdir").value = s.default_output;
     if (s.windows === false) $("#paths").placeholder = "/home/you/Downloads/book.pdf  (separate several with ;)";
     $("#jobs").innerHTML = s.jobs.length ? s.jobs.map(jobHtml).join("") : '<p class="hint">Nothing yet.</p>';
+    trackJobs(s.jobs);
+    document.querySelectorAll(".rerun").forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      const r = await api(`/api/jobs/${b.dataset.id}/rerun`, {method: "POST", body: "{}"}).catch(e => ({error: e.message}));
+      $("#jobsmsg").innerHTML = r.error ? `<span class="err">${esc(r.error)}</span>` : "";
+      askToNotify(); poll();
+    });
     document.querySelectorAll("details[data-log]").forEach(d => d.ontoggle = () => d.open ? openLogs.add(d.dataset.log) : openLogs.delete(d.dataset.log));
     document.querySelectorAll(".open").forEach(b => b.onclick = () => api("/api/open", {method: "POST", body: JSON.stringify({path: b.dataset.p})}));
     document.querySelectorAll("#jobs .preview").forEach(b => b.onclick = () => openZim(b.dataset.p));

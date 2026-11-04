@@ -343,6 +343,28 @@ def new_job(body):
     return jid
 
 
+def rerun_job(jid):
+    """Queue a copy of an earlier job with the same sources and options (Retry / Run again). Returns the new id."""
+    try:
+        old = json.load(open(os.path.join(C.JOBS, jid, "job.json"), encoding="utf-8"))
+    except (OSError, ValueError):
+        raise ValueError("That job's details are gone (cleared from the history).") from None
+    for s in old.get("sources", []):
+        if s.get("type") == "file" and not os.path.exists(s.get("path", "")):
+            uploaded = os.path.realpath(s.get("path", "")).startswith(os.path.realpath(C.UPLOADS) + os.sep)
+            raise ValueError(f"{s.get('name') or 'A file'} isn't there any more"
+                             + (" (uploaded copies are removed after a job): add the file again." if uploaded else "."))
+    new = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
+    d = os.path.join(C.JOBS, new)
+    os.makedirs(d)
+    job = dict(old, created=time.time(), delete_sources=False)   # never deletes anything when run again by hand
+    json.dump(job, open(os.path.join(d, "job.json"), "w", encoding="utf-8"))
+    C.Log(d).stage("Waiting in queue", status="queued")
+    with LOCK:
+        QUEUE.append(new)
+    return new
+
+
 # ---- watched folder: new files that appear in it become ZIMs, with the active profile's options
 WATCH = {"error": "", "folder": "", "sizes": {}}
 WATCH_STATE = os.path.join(C.HOME, "watch.json")   # what was already there: hashes only, no file names
@@ -668,6 +690,12 @@ class H(BaseHTTPRequestHandler):
                 return self._json({"error": str(e)}, 400)
             except Exception as e:  # noqa: BLE001
                 return self._json({"error": f"Couldn't start the job: {e}"}, 400)
+        m = re.fullmatch(r"/api/jobs/([\w-]+)/rerun", u.path)
+        if m:
+            try:
+                return self._json({"id": rerun_job(m.group(1))})
+            except ValueError as e:
+                return self._json({"error": str(e)}, 400)
         m = re.fullmatch(r"/api/jobs/([\w-]+)/(cancel|delete)", u.path)
         if m:
             jid, act = m.groups()
