@@ -38,6 +38,7 @@ def defaults():
             "proxy": C.clean_proxy({}),   # every download goes through it (see common.net_init)
             "i2p": C.clean_i2p({}),       # .i2p addresses go to this I2P router (and only there)
             "hyphanet": C.clean_hyphanet({}),  # Hyphanet keys are read through this computer's node
+            "ipfs": C.clean_ipfs({}),     # IPFS: this computer's IPFS program, or a public gateway
             "private": False,             # keep no job history or list of opened ZIMs
             "neutral_names": False,       # name new ZIM files zim-<date>-<n>.zim instead of after their title
             "browser": "auto",            # the app window: auto (Edge on Windows, a Chromium browser on Linux) or a named one
@@ -78,6 +79,7 @@ def clean(s):
            "check_updates": bool(s.get("check_updates", True)),
            "proxy": C.clean_proxy(s.get("proxy")),
            "i2p": C.clean_i2p(s.get("i2p")), "hyphanet": C.clean_hyphanet(s.get("hyphanet")),
+           "ipfs": C.clean_ipfs(s.get("ipfs")),
            "private": bool(s.get("private")), "neutral_names": bool(s.get("neutral_names")),
            "browser": s.get("browser") if s.get("browser") in BROWSERS else "auto",
            "stop_after": s.get("stop_after") if s.get("stop_after") in STOP_AFTER else 150,
@@ -120,7 +122,7 @@ def save(s):
     with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as f:
         json.dump(s, f, indent=1)   # owner-only: it can hold a proxy password
     os.replace(tmp, PATH)
-    C.net_init(s["proxy"], s["i2p"], s["hyphanet"])   # this process uses them straight away
+    C.net_init(s["proxy"], s["i2p"], s["hyphanet"], s["ipfs"])   # this process uses them straight away
     # the Windows launcher (a VBScript) can't read this file inside Linux: give it the browser choice next to itself
     try:
         with open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),

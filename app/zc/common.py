@@ -332,9 +332,197 @@ class _Hyphanet(urllib.request.BaseHandler):
         return None
 
 
+# IPFS: content addressed by what it is (a CID), not by a server. Read through the user's own IPFS program (IPFS
+# Desktop or Kubo: a gateway on this computer, reached directly) or else, if allowed, a public gateway (through the
+# proxy, like any website; that gateway sees what is fetched). Always as a "subdomain" address (<cid>.ipfs.<gateway>),
+# where a site's links that start with / still work, unlike gateway/ipfs/<cid>/.
+IPFS = {}  # {"on": local node, "port", "public": fall back to a public gateway, "gateway": its host}; empty = never set
+IPFS_NEEDS_NODE = ("This is an IPFS address. Start IPFS Desktop (or Kubo) and turn on ⚙ Settings → Connection and "
+                   "privacy → IPFS, or allow a public gateway there, then try again.")
+B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+
+def clean_ipfs(p):
+    p = p if isinstance(p, dict) else {}
+    try:
+        port = int(p.get("port") or 8080)
+    except (TypeError, ValueError):
+        port = 8080
+    gw = str(p.get("gateway") or "dweb.link").strip().lower()
+    gw = re.sub(r"^https?://|/.*$", "", gw)
+    return {"on": bool(p.get("on")), "port": port if 0 < port < 65536 else 8080,
+            "public": bool(p.get("public", True)),
+            "gateway": gw if re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", gw) else "dweb.link"}
+
+
+def _varints(b, n):
+    out, i = [], 0
+    for _ in range(n):
+        v = shift = 0
+        while True:
+            if i >= len(b):
+                raise ValueError("short")
+            v |= (b[i] & 0x7F) << shift
+            shift += 7
+            i += 1
+            if not b[i - 1] & 0x80:
+                break
+        out.append(v)
+    return out, i
+
+
+def _cid_bytes(s):
+    """A CID in any common text form -> its binary CIDv1, or None if it isn't one."""
+    import base64
+    try:
+        if re.fullmatch(r"Qm[1-9A-HJ-NP-Za-km-z]{44}", s):   # CIDv0: a base58 sha2-256 multihash
+            n = 0
+            for ch in s:
+                n = n * 58 + B58.index(ch)
+            mh = n.to_bytes(34, "big")
+            return b"\x01\x70" + mh if mh[:2] == b"\x12\x20" else None
+        base, rest = s[0], s[1:]
+        if base in "bB":
+            raw = base64.b32decode(rest.upper() + "=" * (-len(rest) % 8))
+        elif base == "k":
+            n = int(rest, 36)
+            raw = n.to_bytes((n.bit_length() + 7) // 8, "big")
+        elif base == "z":
+            n = 0
+            for ch in rest:
+                n = n * 58 + B58.index(ch)
+            raw = n.to_bytes((n.bit_length() + 7) // 8, "big")
+        elif base in "fF":
+            raw = bytes.fromhex(rest)
+        else:
+            return None
+        (version, _codec, _hash, length), i = _varints(raw, 4)
+        return raw if version == 1 and len(raw) - i == length and 0 < length <= 64 else None
+    except (ValueError, IndexError):
+        return None
+
+
+def _b32(raw):
+    import base64
+    return "b" + base64.b32encode(raw).decode().lower().rstrip("=")
+
+
+def _b36(raw):
+    n, s = int.from_bytes(raw, "big"), ""
+    while n:
+        n, r = divmod(n, 36)
+        s = "0123456789abcdefghijklmnopqrstuvwxyz"[r] + s
+    return "k" + s
+
+
+def _ipfs_label(ns, ident):
+    """The subdomain label for a CID (base32) or an IPNS name (a key in base36, or a DNSLink domain with its dots
+    and dashes written the gateway way: en.wikipedia-on-ipfs.org -> en-wikipedia--on--ipfs-org)."""
+    if ns == "ipns" and "." in ident:
+        if not re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", ident.lower()):
+            return None
+        return ident.lower().replace("-", "--").replace(".", "-")
+    if ns == "ipns" and re.fullmatch(r"[a-z0-9]+(--?[a-z0-9]+)*", ident) and "-" in ident:
+        return ident   # already written the gateway way
+    raw = _cid_bytes(ident)
+    if not raw:
+        return None
+    return _b36(raw) if ns == "ipns" else _b32(raw)
+
+
+def ipfs_ref(s):
+    """ipfs://…, ipns://…, /ipfs/…, a bare CID, or a link to any IPFS gateway (gateway/ipfs/<cid>/… or
+    <cid>.ipfs.gateway/…) -> (namespace, subdomain label, path), else None."""
+    s = s.strip()
+    m = (re.match(r"(ipfs|ipns)://([^/?#]+)(.*)$", s, re.I) or re.match(r"/(ipfs|ipns)/([^/?#]+)(.*)$", s, re.I)
+         or re.match(r"https?://[^/]+/(ipfs|ipns)/([^/?#]+)(.*)$", s, re.I))
+    if m:
+        ns, ident, path = m.group(1).lower(), m.group(2), m.group(3)
+    else:
+        m = re.match(r"https?://([a-z0-9-]+)\.(ipfs|ipns)\.[^/]+(.*)$", s, re.I)
+        if m:
+            ident, ns, path = m.group(1), m.group(2).lower(), m.group(3)
+        else:
+            m = re.fullmatch(r"(Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{50,})(/\S*)?", s)
+            if not m:
+                return None
+            ns, ident, path = "ipfs", m.group(1), m.group(2) or ""
+    label = _ipfs_label(ns, ident)
+    if not label or len(label) > 63:
+        return None
+    if not path or path[0] == "#":
+        path = "/"
+    elif path[0] != "/":
+        path = "/" + path
+    return ns, label, path.split("#")[0]
+
+
+def ipfs_url(ref):
+    """The address to fetch: through this computer's IPFS program if it's turned on, else the public gateway
+    (None when neither is allowed)."""
+    ns, label, path = ref
+    cfg = IPFS or clean_ipfs({})
+    if cfg["on"]:
+        return f"http://{label}.{ns}.localhost:{cfg['port']}{path}"
+    if cfg["public"]:
+        return f"https://{label}.{ns}.{cfg['gateway']}{path}"
+    return None
+
+
+def ipfs_path_urls(url):
+    """For a public subdomain address that couldn't be reached (some networks block *.ipfs.* names): the same
+    content as gateway/ipfs/<cid>/… on the same gateway. (Not ipfs.io: it now only serves browsers.)"""
+    p = urllib.parse.urlsplit(url)
+    m = re.fullmatch(r"([a-z0-9-]+)\.(ipfs|ipns)\.(.+)", p.hostname or "")
+    if not m:
+        return []
+    label, ns, gw = m.groups()
+    if ns == "ipns" and "-" in label:   # a DNSLink name written the gateway way: back to its dots
+        label = label.replace("--", "\0").replace("-", ".").replace("\0", "-")
+    rest = (p.path or "/") + ("?" + p.query if p.query else "")
+    return [f"https://{gw}/{ns}/{label}{rest}"]
+
+
+def is_ipfs(url):
+    """'local' (this computer's IPFS gateway), 'public' (a public gateway) or ''."""
+    try:
+        host = urllib.parse.urlsplit(url if "//" in url else "//" + url).hostname or ""
+    except ValueError:
+        return ""
+    m = re.fullmatch(r"[a-z0-9-]+\.(?:ipfs|ipns)\.(.+)", host)
+    if not m:
+        return ""
+    return "local" if m.group(1) == "localhost" else "public"
+
+
+class _IPFSLocal(urllib.request.BaseHandler):
+    """Runs before the proxy handlers: <cid>.ipfs.localhost goes straight to this computer's IPFS gateway (with the
+    name as the Host header, which is how the gateway knows what is asked for), never to DNS or the proxy."""
+    handler_order = 83
+
+    def __init__(self, node=None):
+        self.node = node
+
+    def http_open(self, req):
+        if is_ipfs(req.host or "") != "local":
+            return None
+        if not self.node:
+            raise urllib.error.URLError(IPFS_NEEDS_NODE)
+        port = self.node["port"]
+        return self.do_open(lambda host, **kw: http.client.HTTPConnection("127.0.0.1", port, **kw), req)
+
+    def do_open(self, conn, req):
+        return urllib.request.HTTPHandler().do_open(conn, req)
+
+    def https_open(self, req):
+        if is_ipfs(req.host or "") == "local":
+            raise urllib.error.URLError("this computer's IPFS gateway uses http://, not https://")
+        return None
+
+
 def is_darknet(url):
-    """Onion, I2P or Hyphanet: slow networks, so longer timeouts, fewer requests at once and retries."""
-    return is_onion(url) or is_i2p(url) or is_hyphanet(url)
+    """Onion, I2P, Hyphanet or IPFS: slow networks, so longer timeouts, fewer requests at once and retries."""
+    return is_onion(url) or is_i2p(url) or is_hyphanet(url) or bool(is_ipfs(url))
 
 
 class _I2P(urllib.request.BaseHandler):
@@ -388,10 +576,11 @@ class _WebOnly(urllib.request.BaseHandler):
     file_open = ftp_open = data_open = _refuse
 
 
-def proxy_opener(p, i2p=None, hyphanet=None):
+def proxy_opener(p, i2p=None, hyphanet=None, ipfs=None):
     """A urllib opener that sends everything through proxy p (and nothing around it); .i2p addresses through
-    the I2P router i2p, Hyphanet keys to the local gateway hyphanet ({"host", "port"}, or None: refused)."""
-    i2 = [_I2P(i2p), _Hyphanet(hyphanet)]
+    the I2P router i2p, Hyphanet keys and <cid>.ipfs.localhost to the local gateways hyphanet and ipfs
+    ({"host"/"port"}, or None: refused)."""
+    i2 = [_I2P(i2p), _Hyphanet(hyphanet), _IPFSLocal(ipfs)]
     if p["type"] == "off":
         return urllib.request.build_opener(_WebOnly(), *i2, _NoOnion())
     why = _proxy_problem(p)
@@ -407,18 +596,19 @@ def proxy_opener(p, i2p=None, hyphanet=None):
                                        _WebOnly(), *i2, _Refuse())
 
 
-def net_init(p=None, i2p=None, hyphanet=None):
+def net_init(p=None, i2p=None, hyphanet=None, ipfs=None):
     """Use the proxy, I2P router and Hyphanet gateway from settings.json (or the arguments) for every download
     this process makes."""
-    if p is None or i2p is None or hyphanet is None:
+    if p is None or i2p is None or hyphanet is None or ipfs is None:
         try:
             s = json.load(open(os.path.join(HOME, "settings.json"), encoding="utf-8"))
             p = s.get("proxy") if p is None else p
             i2p = s.get("i2p") if i2p is None else i2p
             hyphanet = s.get("hyphanet") if hyphanet is None else hyphanet
+            ipfs = s.get("ipfs") if ipfs is None else ipfs
         except (OSError, ValueError, AttributeError):
             pass
-    p, i2p, hyphanet = clean_proxy(p), clean_i2p(i2p), clean_hyphanet(hyphanet)
+    p, i2p, hyphanet, ipfs = clean_proxy(p), clean_i2p(i2p), clean_hyphanet(hyphanet), clean_ipfs(ipfs)
     PROXY.clear()
     if p["type"] != "off":
         PROXY.update(p)
@@ -429,7 +619,10 @@ def net_init(p=None, i2p=None, hyphanet=None):
     HYPHANET.clear()
     if hyphanet["on"]:
         HYPHANET.update(host=hyphanet["host"], port=hyphanet["port"])
-    urllib.request.install_opener(proxy_opener(p, dict(I2P) or None, dict(HYPHANET) or None))
+    IPFS.clear()
+    IPFS.update(ipfs)
+    urllib.request.install_opener(proxy_opener(p, dict(I2P) or None, dict(HYPHANET) or None,
+                                               {"port": ipfs["port"]} if ipfs["on"] else None))
 
 
 def _proxy_url():
@@ -500,7 +693,8 @@ def _download_py(url, dest, log, label, size):
         except urllib.error.URLError as e:
             if attempt == 7 or isinstance(e.reason, ssl.SSLCertVerificationError) or "can't be used" in str(e.reason) \
                     or "only downloads web" in str(e.reason) or "onion site" in str(e.reason) \
-                    or "I2P site, which" in str(e.reason) or "Hyphanet" in str(e.reason):
+                    or "I2P site, which" in str(e.reason) or "Hyphanet" in str(e.reason) \
+                    or "IPFS address" in str(e.reason):
                 raise   # a bad certificate or a refused address won't fix itself
         except (TimeoutError, OSError):
             if attempt == 7:
@@ -523,6 +717,8 @@ def download(url, dest, log=None, label="", size=0):
         raise RuntimeError(I2P_NEEDS_ROUTER)
     if is_hyphanet(url) and not hyphanet_ok():
         raise RuntimeError(HYPHANET_NEEDS_NODE)
+    if is_ipfs(url) == "local" and not IPFS.get("on"):
+        raise RuntimeError(IPFS_NEEDS_NODE)
     # onion and I2P: Python's code (it never resolves names locally, and sends .i2p only to the router)
     if not shutil.which("curl") or is_darknet(url):
         _download_py(url, dest, log, label, size)

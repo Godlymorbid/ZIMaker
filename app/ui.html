@@ -16,7 +16,7 @@ try {
 :root{color-scheme:light;--bg:#f6f4ef;--card:#fff;--ink:#222;--mute:#666;--line:#ddd6c8;--acc:#7a1f1f;--on-acc:#fff;--acc2:#a33;--ok:#2e7d32;--bad:#b3261e}
 @media (prefers-color-scheme:dark){:root:not([data-theme=light]){color-scheme:dark;--bg:#1b1a18;--card:#262421;--ink:#eee;--mute:#aaa;--line:#3b3833;--acc:#e08a7a;--on-acc:#1b1a18;--acc2:#f0a090;--ok:#7bc67e;--bad:#ff8a80}}
 :root[data-theme=dark]{color-scheme:dark;--bg:#1b1a18;--card:#262421;--ink:#eee;--mute:#aaa;--line:#3b3833;--acc:#e08a7a;--on-acc:#1b1a18;--acc2:#f0a090;--ok:#7bc67e;--bad:#ff8a80}
-select{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+select{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 8px;max-width:100%}
 #settings{position:fixed;inset:0;display:none;z-index:15;background:rgba(0,0,0,.45);overflow:auto;padding:30px 16px}
 #settings .panel{max-width:720px;margin:0 auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
 #settings h2{font-size:18px;margin:0 0 4px}
@@ -227,6 +227,20 @@ body.dragging #drop{display:flex}
     <label>Gateway port <input type="text" id="s-hyphport" placeholder="8888" inputmode="numeric" autocomplete="off"></label>
   </div>
   <div class="row" id="hyphtestrow"><button id="hyph-test">Test Hyphanet</button><span id="hyph-testmsg" class="hint" aria-live="polite"></span></div>
+
+  <div style="margin-top:14px"><b>IPFS</b></div>
+  <div class="hint">Paste <code>ipfs://</code> or <code>ipns://</code> links, a CID, or a link from any IPFS gateway.</div>
+  <label class="opt"><input type="checkbox" id="s-ipfs"> Read IPFS through my own IPFS program
+    <small>IPFS Desktop or Kubo, running on this computer. ZIMaker reads through its local gateway, never through the proxy above.</small></label>
+  <div class="proxy-grid" id="ipfsfields">
+    <label>Gateway port <input type="text" id="s-ipfsport" placeholder="8080" inputmode="numeric" autocomplete="off"></label>
+  </div>
+  <label class="opt"><input type="checkbox" id="s-ipfspub"> Otherwise, use a public gateway
+    <small>Through the proxy above, like any website. The gateway sees what you fetch. With both off, ZIMaker refuses IPFS addresses.</small></label>
+  <div class="proxy-grid" id="ipfspubfields">
+    <label>Public gateway <input type="text" id="s-ipfsgw" placeholder="dweb.link" autocomplete="off"></label>
+  </div>
+  <div class="row"><button id="ipfs-test">Test IPFS</button><span id="ipfs-testmsg" class="hint" aria-live="polite"></span></div>
 
   <div style="margin-top:14px"><b>Privacy</b></div>
   <label class="opt"><input type="checkbox" id="s-private"> Private mode: keep no history
@@ -541,7 +555,9 @@ function showNodes(i2p, hy) {
   showNodeFields();
 }
 function showNodeFields() {
-  for (const [box, ids] of [["#s-i2p", ["#i2pfields", "#i2ptestrow"]], ["#s-hyph", ["#hyphfields", "#hyphtestrow"]]])
+  $("#ipfspubfields").style.display = $("#s-ipfs").checked || !$("#s-ipfspub").checked ? "none" : "";
+  for (const [box, ids] of [["#s-i2p", ["#i2pfields", "#i2ptestrow"]], ["#s-hyph", ["#hyphfields", "#hyphtestrow"]],
+                            ["#s-ipfs", ["#ipfsfields"]]])
     for (const id of ids) $(id).style.display = $(box).checked ? "" : "none";
 }
 function readI2p() {
@@ -551,13 +567,27 @@ function readI2p() {
 function readHyph() {
   return {on: $("#s-hyph").checked, host: "127.0.0.1", port: parseInt($("#s-hyphport").value, 10) || 8888};
 }
-$("#s-i2p").onchange = $("#s-hyph").onchange = showNodeFields;
+function showIpfs(p) {
+  $("#s-ipfs").checked = p.on; $("#s-ipfsport").value = p.port || ""; $("#s-ipfspub").checked = p.public;
+  $("#s-ipfsgw").value = p.gateway || ""; showNodeFields();
+}
+function readIpfs() {
+  return {on: $("#s-ipfs").checked, port: parseInt($("#s-ipfsport").value, 10) || 8080,
+          public: $("#s-ipfspub").checked, gateway: $("#s-ipfsgw").value.trim() || "dweb.link"};
+}
+$("#s-i2p").onchange = $("#s-hyph").onchange = $("#s-ipfs").onchange = $("#s-ipfspub").onchange = showNodeFields;
+$("#ipfs-test").onclick = () => {
+  const p = readIpfs();
+  if (!p.on && !p.public) { $("#ipfs-testmsg").innerHTML = '<span class="err">Both are off, so IPFS addresses are refused.</span>'; return; }
+  testNode("ipfs", p, "#ipfs-testmsg", "#ipfs-test", "Testing…",
+           p.on ? "Your IPFS program's gateway answers." : `The public gateway ${esc(p.gateway)} answers (through the saved proxy, if any).`);
+};
 async function testNode(kind, node, msg, button, waiting, good) {
   $("#p-wslhint").style.display = "none";
   $(msg).textContent = waiting; $(button).disabled = true;
   const r = await api(`/api/${kind}/test`, {method: "POST", body: JSON.stringify({node})}).catch(e => ({error: e.message}));
   $(button).disabled = false;
-  $(msg).innerHTML = r.ok ? `<span class="good">Working.</span> ${good} · ${r.seconds} s`
+  $(msg).innerHTML = r.ok ? `<span class="good">Working.</span> ${r.note ? "But " + esc(r.note) + "." : good} · ${r.seconds} s`
                           : `<span class="err">Not working: ${esc(r.error || "unknown error")}</span>`;
   if (r.wsl_hint) $("#p-wslhint").style.display = "block";
 }
@@ -658,7 +688,8 @@ $("#opensettings").onclick = () => {
   $("#s-updates").checked = draft.check_updates;
   showProxy(draft.proxy);
   showNodes(draft.i2p || {on: false, host: "127.0.0.1", port: 4444}, draft.hyphanet || {on: false, port: 8888});
-  $("#i2p-testmsg").textContent = ""; $("#hyph-testmsg").textContent = "";
+  showIpfs(draft.ipfs || {on: false, port: 8080, public: true, gateway: "dweb.link"});
+  $("#i2p-testmsg").textContent = ""; $("#hyph-testmsg").textContent = ""; $("#ipfs-testmsg").textContent = "";
   $("#s-browser").value = draft.browser || "auto";
   $("#s-stopafter").value = String(draft.stop_after ?? 150);
   $("#s-notify").checked = draft.notify !== false;
@@ -709,6 +740,7 @@ $("#savesettings").onclick = async () => {
   draft.proxy = readProxy();
   draft.i2p = readI2p();
   draft.hyphanet = readHyph();
+  draft.ipfs = readIpfs();
   draft.browser = $("#s-browser").value;
   draft.stop_after = parseInt($("#s-stopafter").value, 10);
   draft.notify = $("#s-notify").checked;

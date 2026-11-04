@@ -66,7 +66,7 @@ def explain(e):
         return f"The site returned an error (HTTP {e.code} {e.reason})."
     if isinstance(e, (urllib.error.URLError, TimeoutError, OSError)):
         why = str(getattr(e, "reason", "") or e)
-        if "onion site, which" in why or "I2P site, which" in why or "Hyphanet" in why:
+        if "onion site, which" in why or "I2P site, which" in why or "Hyphanet" in why or "IPFS address" in why:
             return why[0].upper() + why[1:] + ("" if why.endswith(".") else ".")
         if C.PROXY:
             if "proxy" in why.lower():  # our own messages: the proxy isn't usable, or it couldn't reach the site
@@ -232,7 +232,11 @@ class Site:
             raise RuntimeError(C.I2P_NEEDS_ROUTER)
         if self.hyphanet and not offline and not C.hyphanet_ok():
             raise RuntimeError(C.HYPHANET_NEEDS_NODE)
-        self.dark = self.onion or self.i2p or self.hyphanet
+        # IPFS: this computer's IPFS program (needs it turned on) or a public gateway
+        self.ipfs = C.is_ipfs(self.start)
+        if self.ipfs == "local" and not offline and not C.IPFS.get("on"):
+            raise RuntimeError(C.IPFS_NEEDS_NODE)
+        self.dark = self.onion or self.i2p or self.hyphanet or bool(self.ipfs)
         self.hosts = {host, host[4:] if host.startswith("www.") else "www." + host}
         # compared with decoded paths in in_scope, so decoded here too (/wiki/Caf%C3%A9/ -> /wiki/Café/)
         self.prefix = urllib.parse.unquote(s.path[: s.path.rfind("/") + 1]) if scope == "section" else "/"
@@ -318,7 +322,7 @@ class Site:
                 # through Tor a circuit can fail ("host unreachable", time-outs): wait and try a new one
                 if not (self.dark and isinstance(e, (urllib.error.URLError, TimeoutError, OSError))) or attempt == 3 \
                         or "onion site, which can only" in str(e) or "I2P site, which" in str(e) \
-                        or "Hyphanet" in str(e):
+                        or "Hyphanet" in str(e) or "IPFS address" in str(e):
                     return url, e
                 time.sleep(5 * (attempt + 1))
         return url, RuntimeError("gave up")
@@ -619,20 +623,52 @@ def prepare(log, url, opts, mode, vdir):
         log("onion site: everything goes through Tor, which is slow; expect this to take a while")
     if site.i2p:
         log("I2P site: everything goes through your I2P router, which is slow; expect this to take a while")
+    if site.ipfs:
+        log("IPFS: read through your IPFS program" if site.ipfs == "local" else
+            f"IPFS: read through the public gateway {C.IPFS.get('gateway', 'dweb.link')}, which sees what is "
+            "fetched (start IPFS Desktop and turn it on in Settings to use your own)")
     if site.hyphanet:
         log(f"Hyphanet freesite {site.prefix}: read through your Hyphanet node, which can take minutes per file; "
             "expect this to take a while")
     log(f"[{site.start}] " + ("saving just this page" if scope == "page" else f"saving up to {max_pages} pages"
                               + (f" under {site.prefix}" if scope == "section" else "")))
     n = site.crawl()
+    # a public IPFS gateway's <cid>.ipfs.… names blocked or unreachable: the path form (gateway/ipfs/<cid>/),
+    # which keeps the crawl inside that one CID; links that start at the site's root may not work this way
+    unreachable = not isinstance(site.start_error, urllib.error.HTTPError) and \
+        isinstance(site.start_error, (urllib.error.URLError, OSError))
+    if not n and site.ipfs == "public" and unreachable:
+        for alt in C.ipfs_path_urls(site.start):
+            log(f"couldn't reach {urllib.parse.urlsplit(site.start).netloc}; trying {alt}")
+            site = Site(log, alt, max_pages, scope, mode, vdir, include_av=bool(opts.get("media")),
+                        keep_scripts=bool(opts.get("scripts")))
+            site.ipfs, site.dark = "public", True
+            root = "/".join(urllib.parse.urlsplit(alt).path.split("/")[:3]) + "/"   # /ipfs/<cid>/
+            if not site.prefix.startswith(root):
+                site.prefix = root
+            n = site.crawl()
+            if n:
+                log.warn("this IPFS site was saved through the gateway's /ipfs/ addresses, so links that start at "
+                         "the site's root (and their pictures and styles) may be missing")
+                break
+    if not n and site.ipfs == "public" and site.start_error is not None:
+        e = site.start_error
+        gw = C.IPFS.get("gateway", "dweb.link")
+        raise RuntimeError((f"The public IPFS gateway {gw} refused (HTTP {e.code})." if isinstance(e, urllib.error.HTTPError)
+                            else f"Couldn't reach the public IPFS gateway {gw} (it may be blocked on this network).")
+                           + " Public gateways are being limited or shut down: the reliable way is your own IPFS "
+                             "program (IPFS Desktop), turned on in ⚙ Settings → Connection and privacy → IPFS. "
+                             "Or try another public gateway there.")
     if not n:
         if site.start_error is not None:
             e = site.start_error
-            if (site.i2p or site.hyphanet) and not isinstance(e, urllib.error.HTTPError) \
-                    and not re.search(r"I2P site, which|Hyphanet", str(getattr(e, "reason", "") or e)):
+            if (site.i2p or site.hyphanet or site.ipfs == "local") and not isinstance(e, urllib.error.HTTPError) \
+                    and not re.search(r"I2P site, which|Hyphanet|IPFS address", str(getattr(e, "reason", "") or e)):
                 raise RuntimeError(  # the router or node is on this computer, not behind the proxy
                     "Couldn't reach this I2P site. Check that your I2P router is running (a new router needs a few "
                     "minutes to join the network) and that the site is online." if site.i2p else
+                    "Couldn't reach your IPFS program. Check that IPFS Desktop (or Kubo) is running, and the gateway "
+                    "port in ⚙ Settings." if site.ipfs else
                     "Couldn't read this freesite. Check that Hyphanet is running and connected, and that the key is "
                     "complete (a new node needs a while to find content).")
             raise RuntimeError(explain(e))
@@ -649,6 +685,8 @@ def prepare(log, url, opts, mode, vdir):
     if site.hyphanet:   # not "127.0.0.1:8888": the freesite's name
         parts = site.prefix.strip("/").split("/")
         host = parts[1] if len(parts) > 1 else "Hyphanet"
+    if site.ipfs:   # not "bafy….ipfs.dweb.link"
+        host = "IPFS"
     title = start["title"] if start["title"] and not re.match(r"https?://", start["title"]) else host
     return {"kind": "site", "title": title, "creator": host, "publisher": host,
             "date": time.strftime("%Y-%m-%d"), "language": "eng", "source": site.start,

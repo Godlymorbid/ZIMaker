@@ -162,31 +162,50 @@ def proxy_test(p):
 def node_test(kind, p):
     """Is the I2P router or Hyphanet node (from the Settings window, not saved yet) answering? I2P: also fetch a
     well-known I2P site through it, to show the router has joined the network."""
-    p = C.clean_i2p(p) if kind == "i2p" else C.clean_hyphanet(p)
-    gw = {"host": p["host"], "port": p["port"]}
+    p = C.clean_i2p(p) if kind == "i2p" else C.clean_ipfs(p) if kind == "ipfs" else C.clean_hyphanet(p)
+    gw = {"host": p.get("host", "127.0.0.1"), "port": p["port"]}
     t = time.time()
     try:
-        if kind == "i2p":
+        if kind == "ipfs":   # the empty file's CID: answered at once, without fetching anything from the network
+            if p["on"]:
+                opener, url = C.proxy_opener(C.clean_proxy({}), ipfs=gw), f"http://bafkqaaa.ipfs.localhost:{p['port']}/"
+            else:            # the public gateway, through the proxy like every website
+                opener, url = C.proxy_opener(C.clean_proxy(dict(C.PROXY))), f"https://bafkqaaa.ipfs.{p['gateway']}/"
+        elif kind == "i2p":
             opener = C.proxy_opener(C.clean_proxy({}), i2p=gw)
             url = "http://i2p-projekt.i2p/"
         else:   # the gateway's own start page, directly: answers when the node is running (no network fetch)
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             url = f"http://{'[::1]' if gw['host'] in ('::1', '[::1]') else gw['host']}:{gw['port']}/"
         req = urllib.request.Request(url, headers=C.UA)
-        with opener.open(req, timeout=90 if kind == "i2p" else 15) as r:
+        with opener.open(req, timeout=90 if kind == "i2p" else 40 if kind == "ipfs" else 15) as r:
             r.read(2000)
         return {"ok": True, "seconds": round(time.time() - t, 1)}
     except Exception as e:  # noqa: BLE001
         why = str(getattr(e, "reason", "") or e)
         out = {"ok": False, "error": why}
-        if "refused" in why.lower():
-            out["error"] = (f"nothing answers at {p['host']}:{p['port']}. Is "
-                            + ("your I2P router" if kind == "i2p" else "Hyphanet") + " running, on that port?")
+        if kind == "ipfs" and not p["on"] and not isinstance(e, urllib.error.HTTPError):
+            # <cid>.ipfs.<gateway> names blocked? Jobs then use gateway/ipfs/<cid>/ instead: test that too
+            for g in (p["gateway"],):
+                try:
+                    with opener.open(urllib.request.Request(f"https://{g}/ipfs/bafkqaaa", headers=C.UA), timeout=40) as r:
+                        r.read(2000)
+                    return {"ok": True, "seconds": round(time.time() - t, 1),
+                            "note": f"only as {g}/ipfs/… (this network blocks {p['gateway']}'s IPFS subdomains), "
+                                    "so links that start at a site's root may not work"}
+                except Exception:  # noqa: BLE001
+                    pass
+            out["error"] = (f"couldn't reach the public gateway {p['gateway']} (it may be down or blocked on this "
+                            "network). Try another public gateway, or your own IPFS program")
+        if "refused" in why.lower() and (kind != "ipfs" or p["on"]):
+            out["error"] = (f"nothing answers at {gw['host']}:{p['port']}. Is "
+                            + {"i2p": "your I2P router", "ipfs": "IPFS Desktop (or Kubo)"}.get(kind, "Hyphanet")
+                            + " running, on that port?")
         if isinstance(e, urllib.error.HTTPError) and kind == "i2p":
             # the router answered (its own error page: site not found yet, router still starting)
             out = {"ok": False, "error": f"the router answered, but couldn't reach the test site yet (HTTP {e.code}). "
                                          "A new router needs a few minutes to join the network.", "router": True}
-        if C.IS_WSL and p["host"].strip("[]") in ("127.0.0.1", "localhost", "::1") and \
+        if C.IS_WSL and (kind != "ipfs" or p["on"]) and gw["host"].strip("[]") in ("127.0.0.1", "localhost", "::1") and \
                 ("refused" in why.lower() or "timed out" in why.lower()):
             out["wsl_hint"] = True
         return out
@@ -262,6 +281,10 @@ def classify(line):
     key = C.hyphanet_key(s)   # USK@…, freenet:…, or a link to the node's gateway: a Hyphanet freesite
     if key:
         return "web", C.hyphanet_url(key)
+    ref = C.ipfs_ref(s)       # ipfs://, ipns://, a CID, or a link to any IPFS gateway
+    if ref:
+        url = C.ipfs_url(ref)
+        return ("web", url) if url else (None, C.IPFS_NEEDS_NODE)
     if re.match(r"https?://", s, re.I):
         host = urllib.parse.urlsplit(s).netloc.lower()
         if host.endswith("archive.org") and ia.item_id(s):
@@ -759,7 +782,7 @@ class H(BaseHTTPRequestHandler):
                 return self._json({"error": str(e)}, 400)
         if u.path == "/api/proxy/test":
             return self._json(proxy_test(self._body().get("proxy")))
-        if u.path in ("/api/i2p/test", "/api/hyphanet/test"):
+        if u.path in ("/api/i2p/test", "/api/hyphanet/test", "/api/ipfs/test"):
             return self._json(node_test(u.path.split("/")[2], self._body().get("node")))
         if u.path == "/api/history/clear":
             return self._json({"ok": True, "removed": clear_history()})

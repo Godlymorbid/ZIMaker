@@ -147,6 +147,7 @@ The viewer shows the ZIM's pages without running their scripts, so a ZIM from an
 | Onion sites (Tor) ² | `.onion` addresses | saved like any website, through Tor |
 | I2P sites ² | `.i2p` addresses (including `.b32.i2p`) | saved like any website, through your I2P router |
 | Hyphanet freesites ² | keys (`USK@…`, `SSK@…`, `CHK@…`, also with `freenet:` in front) or links from your node's gateway | the freesite, every edition of it, read through your own Hyphanet node |
+| IPFS ² | `ipfs://` and `ipns://` links, CIDs (`Qm…`, `bafy…`), or links from any IPFS gateway | the site or folder, read through your own IPFS program or a public gateway |
 | archive.org books | item links or IDs | OCR text of every page, with printed page numbers and running heads; scans of illustrated pages. Audio items (e.g. LibriVox recordings) become audiobooks |
 | Online libraries | a link to a book's page | **Project Gutenberg** and **Standard Ebooks**: the book's EPUB, with illustrations. **Wikisource**: the work, via Wikisource's EPUB export. **OpenStax**: the textbook's PDF. **LibriVox**: the audiobook (MP3 chapters, no FFmpeg needed), plus the book's text when LibriVox links it on Project Gutenberg |
 | IIIF libraries | a IIIF manifest link | page scans, with text where the library provides it. Works with many museums and libraries: the Wellcome Collection, Oxford's Bodleian, Stanford, Princeton, e-codices and more |
@@ -164,7 +165,7 @@ The viewer shows the ZIM's pages without running their scripts, so a ZIM from an
 | Help files ¹ | CHM | the help pages as a website |
 
 ¹ Needs an optional tool (below).
-² Needs Tor, I2P or Hyphanet running, and a setting turned on: see [Onion, I2P and Hyphanet sites](#onion-i2p-and-hyphanet-sites).
+² Needs Tor, I2P, Hyphanet or IPFS running and a setting turned on (IPFS can also use a public gateway): see [Onion, I2P, Hyphanet and IPFS](#onion-i2p-hyphanet-and-ipfs).
 
 **Libraries that block automated tools:** the Library of Congress, Gallica, the Biodiversity Heritage Library and HathiTrust put their sites behind "checking your browser" pages (Cloudflare). ZIMaker doesn't try to get around that. It says so, and you can download the book in your browser and add the file instead. Many of the same books are also on archive.org.
 
@@ -229,7 +230,7 @@ Or run Tor inside WSL instead (`sudo apt install tor`), and use **Tor service**.
 
 Using Tor or a VPN is itself illegal or watched in some countries, and a well-equipped state can often tell that you're using one, even when it can't see what you're reading.
 
-### Onion, I2P and Hyphanet sites
+### Onion, I2P, Hyphanet and IPFS
 
 ZIMaker can save sites that exist only on these networks. Paste the address like any other; one without `http://` gets it added. Without the right program running and set up, ZIMaker refuses the address before connecting, so the name never reaches your network's DNS server or an ordinary proxy. These networks are slow, so ZIMaker uses longer timeouts, makes fewer requests at once, and retries when a connection drops. Expect them to take much longer than ordinary sites.
 
@@ -237,7 +238,12 @@ ZIMaker can save sites that exist only on these networks. Paste the address like
 - **I2P sites** (`.i2p`): install [I2P](https://geti2p.net/) or [i2pd](https://i2pd.website/) and start it. In **⚙ Settings → Connection and privacy**, turn on **I2P sites**. The router's HTTP proxy is normally 127.0.0.1, port 4444 (the same for both). Only `.i2p` addresses go to the router; everything else keeps using the proxy above, or none. **Test I2P** fetches the I2P project's own site through the router. A newly started router needs a few minutes to join the network.
 - **Hyphanet freesites** (formerly Freenet): install [Hyphanet](https://www.hyphanet.org/) and start it. In Settings, turn on **Hyphanet**; its gateway port is normally 8888. Paste a key (`USK@…/site/5/`) or a link copied from your node's gateway (`http://127.0.0.1:8888/USK@…`). ZIMaker reads it through your node, saves only that freesite (every edition it links to, not other freesites or the node's own pages), and asks the gateway to hand over files up to 500 MB instead of stopping at its "confirm" page. The node fetches each file from the network first, which can take minutes, and content your node has never seen takes longest. Hyphanet's gateway already filters scripts out of freesites.
 
-On Windows, I2P and Hyphanet installed on Windows itself need the same `.wslconfig` fix as Tor Browser (above). Or install them inside WSL.
+- **IPFS**: content is found by what it is (its CID), not by which server holds it, so blocking one server doesn't remove it. Paste an `ipfs://` or `ipns://` link, a CID, or a link from any gateway (`https://ipfs.io/ipfs/…`, `https://….ipfs.dweb.link/…`).
+  - **Your own IPFS program (recommended):** install [IPFS Desktop](https://docs.ipfs.tech/install/ipfs-desktop/) (or Kubo) and start it. In Settings, turn on **Read IPFS through my own IPFS program**; its gateway port is normally 8080. ZIMaker reads through it directly, never through the proxy.
+  - **A public gateway:** without your own IPFS program, ZIMaker uses a public gateway (dweb.link unless you choose another), through the proxy like any website. The gateway sees what you fetch. Public gateways are being limited or shut down (ipfs.io now serves only browsers), and some networks block them. If a gateway's `<cid>.ipfs.…` addresses are blocked, ZIMaker tries its `/ipfs/<cid>/` addresses instead. That works, but links that start at the site's root may be missing. Turn the public gateway off and ZIMaker refuses IPFS addresses instead.
+  - **Test IPFS** checks the gateway with an empty file, which needs nothing from the network.
+
+On Windows, I2P, Hyphanet and IPFS installed on Windows itself need the same `.wslconfig` fix as Tor Browser (above). Or install them inside WSL.
 
 Other overlay networks aren't built in. Networks that work at the system level, such as Yggdrasil or a VPN, need nothing from ZIMaker: if your computer can reach the address, ZIMaker can save it.
 
