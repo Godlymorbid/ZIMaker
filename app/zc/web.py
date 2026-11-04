@@ -33,7 +33,10 @@ NOT_PAGE_EXT = re.compile(r"\.(jpe?g|png|gif|webp|avif|svg|ico|bmp|tiff?|mp4|web
                           r"pdf|zip|gz|tgz|rar|7z|exe|msi|dmg|iso|apk|css|js|json|xml|rss|atom|woff2?|ttf|otf|eot)$", re.I)
 SKIP = ("mailto:", "javascript:", "data:", "tel:", "about:", "blob:", "sms:", "#")
 
-TAG_RE = re.compile(r"<(a|area|link|img|script|source|video|audio|iframe|frame|embed|track|input|object|image|use|meta|body|td|table|base)\b[^>]*>", re.I)
+# a tag runs to the first '>' outside quotes (title="a > b" doesn't end it)
+TAG_BODY = r"""(?:[^>"']|"[^"]*"|'[^']*')*"""
+TAG_RE = re.compile(r"<(a|area|link|img|script|source|video|audio|iframe|frame|embed|track|input|object|image|use|meta|body|td|table|base)\b"
+                    + TAG_BODY + ">", re.I)
 ATTR_RE = re.compile(r"""(\s)(href|src|poster|data-src|data-original|background|data|xlink:href|content|srcset|data-srcset)(\s*=\s*)(?:(["'])(.*?)\4|([^\s"'>]+))""", re.I | re.S)
 CSS_URL_RE = re.compile(r"""url\(\s*(['"]?)([^'")]+?)\1\s*\)|@import\s+(['"])([^'"]+)\3""", re.I)
 STYLE_BLOCK_RE = re.compile(r"(<style\b[^>]*>)(.*?)(</style>)", re.I | re.S)
@@ -79,8 +82,17 @@ def explain(e):
 # ZIMaker's preview, and pictures that only a script would have loaded ("lazy loading") are made real pictures.
 SCRIPT_RE = re.compile(r"<script\b([^>]*)>.*?</script\s*>|<script\b[^>]*/>", re.I | re.S)
 DATA_SCRIPT = re.compile(r"""\stype\s*=\s*["']?application/(ld\+)?json""", re.I)   # data, not code: keep
-OPEN_TAG_RE = re.compile(r"<[a-zA-Z][^>]*>")
-EVENT_ATTR_RE = re.compile(r"""\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)""", re.I)
+OPEN_TAG_RE = re.compile(r"<[a-zA-Z]" + TAG_BODY + ">")
+# one attribute of a tag: its separator (space or '/'), name, and value if any; quoted values are read whole, so
+# text that merely looks like an attribute inside another one's value (title="x onclick=y") isn't touched
+ATTR_ITEM_RE = re.compile(r"""([\s/]+)([^\s=>/"']+)(\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*))?""")
+
+
+def _drop_events(tag):
+    """Remove onclick=, onload=, ... from one tag."""
+    head = re.match(r"<[a-zA-Z][\w:-]*", tag)
+    rest = ATTR_ITEM_RE.sub(lambda m: "" if m.group(2).lower().startswith("on") else m.group(0), tag[head.end():])
+    return tag[:head.end()] + rest
 JS_HREF_RE = re.compile(r"""(\shref\s*=\s*)(["'])\s*javascript:.*?\2""", re.I | re.S)
 SCRIPT_PRELOAD_RE = re.compile(r"""<link\b[^>]*\brel\s*=\s*["']?(?:modulepreload|preload[^>]*\bas\s*=\s*["']?script)[^>]*>""", re.I)
 LAZY_RE = re.compile(r"""\s(data-lazy-src|data-src|data-original|data-lazy-srcset|data-srcset)\s*=\s*(["'])(.*?)\2""", re.I | re.S)
@@ -95,8 +107,12 @@ def _unlazy(tag):
         val = next((lazy[a] for a in attr if lazy.get(a, "").strip()), None)
         if val is None:
             continue
-        cur = re.search(rf"""\s{real}\s*=\s*(["'])(.*?)\1""", tag, re.I | re.S)
-        if cur and cur.group(2).strip() and not cur.group(2).strip().lower().startswith("data:"):
+        cur = re.search(rf"""\s{real}\s*=\s*(?:(["'])(.*?)\1|([^\s"'>]+))""", tag, re.I | re.S)
+        now = ((cur.group(2) if cur.group(1) else cur.group(3)) if cur else "").strip().lower()
+        placeholder = (not now or now.startswith("data:")
+                       or re.search(r"(blank|spacer|placeholder|lazy|loading|transparent|pixel|1x1|empty|gr[ae]y)[^/]*$", now)
+                       or (now.split("?")[0].endswith(".gif") and not val.lower().split("?")[0].endswith(".gif")))
+        if not placeholder:
             continue   # already has a real picture
         new = f' {real}="{val}"'
         tag = (tag[:cur.start()] + new + tag[cur.end():]) if cur else re.sub(r"\s*/?>$", lambda m: new + m.group(0), tag, count=1)
@@ -125,8 +141,9 @@ def static_page(text):
     text = SCRIPT_PRELOAD_RE.sub("", text)
 
     def tag(m):
-        t = EVENT_ATTR_RE.sub("", m.group(0))
+        t = _drop_events(m.group(0))
         t = JS_HREF_RE.sub(r'\1\2#\2', t)
+        t = re.sub(r"""(\shref\s*=\s*)javascript:[^\s>]*""", r'\1"#"', t, flags=re.I)   # unquoted too
         return _unlazy(t) if re.match(r"<(img|source|iframe|video)\b", t, re.I) else t
     text = OPEN_TAG_RE.sub(tag, text)
     # last in <head>, so it wins over the site's own styles (and !important beats their inline ones)
@@ -176,13 +193,24 @@ def _rel(target, from_path, frag=""):
             + ("#" + urllib.parse.quote(urllib.parse.unquote(frag), safe=SAFE) if frag else ""))
 
 
+class OnDisk:
+    """A downloaded file kept on disk rather than in memory (big audio/video)."""
+
+    def __init__(self, path, size):
+        self.path, self.size = path, size
+
+    def __len__(self):
+        return self.size
+
+
 PLAYABLE = ("video/mp4", "video/webm", "video/ogg", "audio/mpeg", "audio/mp3", "audio/ogg", "audio/webm",
             "audio/mp4", "audio/aac", "audio/wav", "audio/x-wav", "audio/flac", "audio/opus")
 MAX_AV = 500_000_000  # per audio/video file, when the profile keeps website audio and video
 
 
 class Site:
-    def __init__(self, log, start, max_pages, scope, mode, vdir, include_av=False, offline=False, keep_scripts=False):
+    def __init__(self, log, start, max_pages, scope, mode, vdir, include_av=False, offline=False, keep_scripts=False,
+                 robots=True):
         self.log, self.mode, self.vdir = log, mode, vdir
         self.keep_scripts = keep_scripts  # off: pages are saved without their JavaScript (see static_page)
         self.include_av = include_av and mode != "none"
@@ -197,7 +225,8 @@ class Site:
         if self.onion and not offline and not C.onion_ok():
             raise RuntimeError(C.ONION_NEEDS_TOR)
         self.hosts = {host, host[4:] if host.startswith("www.") else "www." + host}
-        self.prefix = s.path[: s.path.rfind("/") + 1] if scope == "section" else "/"
+        # compared with decoded paths in in_scope, so decoded here too (/wiki/Caf%C3%A9/ -> /wiki/Café/)
+        self.prefix = urllib.parse.unquote(s.path[: s.path.rfind("/") + 1]) if scope == "section" else "/"
         self.max_pages = max_pages
         self.store = os.path.join(vdir, "site")
         os.makedirs(self.store, exist_ok=True)
@@ -211,7 +240,7 @@ class Site:
         self.single = scope == "page"  # just the linked page (plus its pictures and styles)
         self.robots = urllib.robotparser.RobotFileParser()   # only for its Crawl-delay
         try:
-            if offline:  # building from a saved page: no network at all
+            if offline or not robots:  # a saved page: no network at all; Check links: one request only
                 raise RuntimeError
             txt = self._get(f"{s.scheme}://{host}/robots.txt", small=True)[3].decode("utf-8", "replace")
             self.robots.parse(txt.splitlines())
@@ -225,14 +254,33 @@ class Site:
         timeout = (60 if small else 120) if self.onion else (20 if small else 45)
         with urllib.request.urlopen(req, timeout=timeout) as r:
             ctype = r.headers.get_content_type()
-            limit = MAX_AV if self.include_av and ctype.split("/")[0] in ("video", "audio") else MAX_FILE
-            n = int(r.headers.get("Content-Length") or 0)
+            av = self.include_av and ctype.split("/")[0] in ("video", "audio")
+            limit = MAX_AV if av else MAX_FILE
+            try:
+                n = int(r.headers.get("Content-Length") or 0)
+            except ValueError:
+                n = 0
             if n > limit:
                 raise RuntimeError("too large")
+            if av:  # up to 500 MB: straight to disk, never held in memory (several download at once)
+                tmp = os.path.join(self.store, "part-" + hashlib.sha1(url.encode()).hexdigest())
+                size = 0
+                with open(tmp, "wb") as f:
+                    while True:
+                        chunk = r.read(1 << 20)
+                        if not chunk:
+                            break
+                        size += len(chunk)
+                        if size > limit:
+                            f.close()
+                            os.remove(tmp)
+                            raise RuntimeError("too large")
+                        f.write(chunk)
+                return r.geturl(), ctype, r.headers.get_content_charset(), OnDisk(tmp, size)
             data = r.read(limit + 1)
             if len(data) > limit:
                 raise RuntimeError("too large")
-            return r.geturl(), r.headers.get_content_type(), r.headers.get_content_charset(), data
+            return r.geturl(), ctype, r.headers.get_content_charset(), data
 
     def fetch(self, url):
         if self.delay:
@@ -271,11 +319,16 @@ class Site:
         z = zpath_for(url)
         if z in self.by_z:
             self.saved[url] = self.saved[self.by_z[z]]
+            if isinstance(data, OnDisk):
+                os.remove(data.path)
             return False
         self.by_z[z] = url
         disk = hashlib.sha1(url.encode()).hexdigest()
-        with open(os.path.join(self.store, disk), "wb") as f:
-            f.write(data)
+        if isinstance(data, OnDisk):  # audio/video, already downloaded to a file
+            os.replace(data.path, os.path.join(self.store, disk))
+        else:
+            with open(os.path.join(self.store, disk), "wb") as f:
+                f.write(data)
         self.saved[url] = {"z": z, "disk": disk, "mime": mime, "title": title, "kind": kind}
         self.total += len(data)
         return True
@@ -347,7 +400,8 @@ class Site:
                     return am.group(0)
                 if attr in ("srcset", "data-srcset"):
                     parts = []
-                    for item in val.split(","):
+                    # entries are separated by a comma *and* space: CDN addresses (w_100,h_50) contain commas
+                    for item in re.split(r",\s+|,(?=[a-z]+:)", val.strip()):
                         bits = item.strip().split()
                         if not bits:
                             continue
@@ -370,9 +424,19 @@ class Site:
                 tag = re.sub(r"""\s(integrity|crossorigin)\s*=\s*(["']).*?\2""", "", tag, flags=re.I)
             return tag
 
+        # scripts' code (kept only when the profile keeps JavaScript) and comments are set aside first: '<img src="'
+        # inside a JavaScript string isn't a link, and rewriting it would break the script
+        hidden = []
+
+        def hide(m):
+            hidden.append(m.group(2))
+            return f"{m.group(1)}\x00ZM{len(hidden) - 1}\x00{m.group(3)}"
+        text = re.sub(r"(<script\b" + TAG_BODY + r">)(.*?)(</script\s*>)", hide, text, flags=re.I | re.S)
+        text = re.sub(r"(<!--)(.*?)(-->)", hide, text, flags=re.S)
         out = TAG_RE.sub(tag_sub, text)
         out = STYLE_BLOCK_RE.sub(lambda m: m.group(1) + css(m.group(2)) + m.group(3), out)
         out = STYLE_ATTR_RE.sub(lambda m: m.group(1) + m.group(2) + css(m.group(3)) + m.group(2), out)
+        out = re.sub(r"\x00ZM(\d+)\x00", lambda m: hidden[int(m.group(1))], out)
         if rewrite and self.mode == "none":
             out = re.sub(r"<(img|video|audio|source|picture|embed)\b[^>]*>(</(video|audio|picture)>)?", "", out, flags=re.I)
         return found if rewrite is None else out
@@ -398,6 +462,9 @@ class Site:
     # ---------------------------------------------------------------- crawl
     @staticmethod
     def _decode(data, charset):
+        for bom, enc in ((b"\xef\xbb\xbf", "utf-8-sig"), (b"\xff\xfe", "utf-16"), (b"\xfe\xff", "utf-16")):
+            if data.startswith(bom):  # a byte-order mark says it for certain
+                return data.decode(enc, "replace")
         if not charset:
             m = re.search(rb"""<meta[^>]+charset\s*=\s*["']?([\w-]+)""", data[:4096], re.I)
             charset = m.group(1).decode() if m else "utf-8"
@@ -486,6 +553,9 @@ class Site:
                     else:
                         self._save(url, data, mime or "application/octet-stream")
                 log.stage(f"Saving website files: {n} of {len(seen)}", n, len(seen))
+        for f in os.listdir(self.store):  # audio/video fetched to disk but not kept (a format readers can't play)
+            if f.startswith("part-"):
+                os.remove(os.path.join(self.store, f))
         return n_pages
 
     def rewrite(self):
@@ -504,7 +574,7 @@ class Site:
 
 def peek(url):
     """Quick look for the 'Check links' button: title, and whether it's a web page."""
-    s = Site(lambda *_: None, url, 1, "site", "pictures", os.path.join(C.HOME, "peek"))
+    s = Site(lambda *_: None, url, 1, "site", "pictures", os.path.join(C.HOME, "peek"), robots=False)
     try:
         final, mime, charset, data = s._get(s.start, small=True)
     except Exception as e:  # noqa: BLE001
@@ -518,10 +588,7 @@ def peek(url):
 def prepare(log, url, opts, mode, vdir):
     # a IIIF manifest whose address doesn't say "manifest" (e.g. Wellcome's): treat it as the book it describes
     if re.search(r"iiif|presentation", url, re.I) and not C.is_onion(url):
-        try:
-            m = C.get_json(url, timeout=30)
-        except Exception:  # noqa: BLE001  not JSON: an ordinary website
-            m = None
+        m = C.get_json_small(url)   # only a JSON answer, and only a few MB of it: else an ordinary website
         if isinstance(m, dict) and "iiif.io" in json.dumps(m.get("@context", "")) and ("sequences" in m or "items" in m):
             from . import library
             return library.iiif(log, url, mode, vdir)

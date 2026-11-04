@@ -80,7 +80,7 @@ def clean(s):
     w = s.get("watch") if isinstance(s.get("watch"), dict) else {}
     out["watch"] = {"on": bool(w.get("on")), "folder": str(w.get("folder") or "").strip()[:500], "delete": bool(w.get("delete"))}
     profiles = {}
-    for name, p in (s.get("profiles") or {}).items():
+    for name, p in (s.get("profiles") if isinstance(s.get("profiles"), dict) else {}).items():
         name = " ".join(str(name).split())[:40]
         if name and name not in profiles and len(profiles) < 50:
             profiles[name] = clean_profile(p)
@@ -93,8 +93,18 @@ def clean(s):
 
 def load():
     try:
-        return clean(json.load(open(PATH, encoding="utf-8")))
+        with open(PATH, encoding="utf-8") as f:
+            s = json.load(f)
     except (OSError, ValueError):
+        return defaults()
+    try:
+        if os.stat(PATH).st_mode & 0o077:   # from an older version: make it owner-only (it can hold a proxy password)
+            os.chmod(PATH, 0o600)
+    except OSError:
+        pass
+    try:
+        return clean(s)
+    except Exception:  # noqa: BLE001  valid JSON but not in the expected shape (hand-edited, very old)
         return defaults()
 
 

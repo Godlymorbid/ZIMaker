@@ -4,7 +4,7 @@ $Dir = (Resolve-Path $Dir).Path.TrimEnd('\')
 $Installed = Join-Path $env:LOCALAPPDATA 'Programs\ZIMaker'
 
 Write-Host "Uninstalling ZIMaker" -ForegroundColor Yellow
-try { Invoke-WebRequest -UseBasicParsing -Method POST -Body '{"force": true}' 'http://127.0.0.1:8765/api/quit' -TimeoutSec 3 | Out-Null; Start-Sleep 2 } catch {}
+try { Invoke-WebRequest -UseBasicParsing -Method POST -Headers @{ 'X-ZIMaker' = '1' } -Body '{"force": true}' 'http://127.0.0.1:8765/api/quit' -TimeoutSec 3 | Out-Null; Start-Sleep 2 } catch {}
 
 foreach ($folder in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs'))) {
   $lnk = Join-Path $folder 'ZIMaker.lnk'
@@ -80,7 +80,8 @@ if (-not $Quiet -and (Wsl-On)) {
 if ($Dir -eq $Installed -and (Test-Path (Join-Path $Dir 'ZIMaker.vbs'))) {
   # the folder is in use while this window is open; remove it once the window (our parent cmd.exe) closes
   $parent = (Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId
-  $cmd = "Wait-Process -Id $parent -ErrorAction SilentlyContinue; Start-Sleep 1; Remove-Item -LiteralPath '$Dir' -Recurse -Force"
+  $q = $Dir -replace "'", "''"   # a folder like C:\Users\O'Brien\...: '' is a ' inside a '...' string
+  $cmd = "Wait-Process -Id $parent -ErrorAction SilentlyContinue; Start-Sleep 1; Remove-Item -LiteralPath '$q' -Recurse -Force"
   Start-Process powershell.exe -ArgumentList '-NoProfile', '-WindowStyle', 'Hidden', '-Command', $cmd -WindowStyle Hidden -WorkingDirectory $env:TEMP
   Write-Host "The program folder ($Dir) will be removed when you close this window."
 } else {

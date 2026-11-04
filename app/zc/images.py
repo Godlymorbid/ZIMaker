@@ -18,6 +18,7 @@ BLOB_MIN = 15     # cells in the largest cluster for a page to count as illustra
 INK_PLATE = 0.10  # or: this share of the page is uncovered ink (photo plates, full-page maps)
 
 SCAN_WIDTH = 1800    # page scans (set per job from the profile's image quality; see settings.py)
+MAX_SIDE = 16000     # no side longer than this (WebP's limit is 16383)
 SCAN_QUALITY = 65
 PHOTO_SIDE = 2400    # gallery pictures
 PHOTO_QUALITY = 82
@@ -105,10 +106,13 @@ def save_scan(img, out, width=None, quality=None):
     width, quality = width or SCAN_WIDTH, quality or SCAN_QUALITY
     img = img.convert("RGB")
     if img.width > width:
-        img = img.resize((width, round(width * img.height / img.width)), Image.LANCZOS)
+        img = img.resize((width, max(1, round(width * img.height / img.width))), Image.LANCZOS)
+    if img.height > MAX_SIDE:  # a very tall page (a whole web page printed on one): WebP stops at 16383 pixels
+        img = img.resize((max(1, round(img.width * MAX_SIDE / img.height)), MAX_SIDE), Image.LANCZOS)
     sat = img.resize((300, 400)).convert("HSV").split()[1]
     if sum(sat.histogram()[110:]) / (300 * 400) < 0.02:
         img = ImageOps.autocontrast(img.convert("L"), cutoff=0.5)
-    img.save(out + ".tmp", "WEBP", quality=quality, method=6)
+    # method 4: about twice as fast as 6 for files only 1-3% bigger (thousands of pages per book)
+    img.save(out + ".tmp", "WEBP", quality=quality, method=4)
     os.replace(out + ".tmp", out)
     return img.size

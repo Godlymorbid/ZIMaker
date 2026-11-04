@@ -180,12 +180,7 @@ CHAPTER = re.compile(r"^\s*(chapter|book|part|section|act|canto|letter|volume)\b
 
 
 def _decode(raw):
-    for enc in ("utf-8-sig", "cp1252", "latin-1"):
-        try:
-            return raw.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    return raw.decode("utf-8", "replace")
+    return C.decode_text(raw)   # UTF-16 too (Windows PowerShell's and old Notepad's default)
 
 
 def _text(log, path, stem):
@@ -236,7 +231,7 @@ def prepare_gallery(log, items, title, vdir):
             else:
                 images.save_photo(path, os.path.join(vdir, rel))
         except Exception as ex:  # noqa: BLE001
-            log(f"skipped {name}: {ex}")
+            log.warn(f"skipped {name}: {ex}")
             continue
         pages.append({"label": os.path.splitext(os.path.basename(name))[0], "head": "", "body": "", "image": rel})
         if i % 20 == 0:
@@ -254,12 +249,25 @@ def _natural(s):
 
 # ---------------------------------------------------------------- archives
 
+MAX_UNPACK = 20_000_000_000   # bytes one archive may unpack to (a "zip bomb" is tiny but unpacks to terabytes)
+MAX_MEMBERS = 100_000
+MAX_DEPTH = 3                 # archives inside archives inside archives, at most
+
+
+def _too_big(total, count):
+    if total > MAX_UNPACK or count > MAX_MEMBERS:
+        raise RuntimeError(f"This archive would unpack to {total / 1e9:.0f} GB in {count} files, more than ZIMaker "
+                           f"handles ({MAX_UNPACK / 1e9:.0f} GB, {MAX_MEMBERS} files); it may be damaged or a trick file.")
+
+
 def _extract(log, path, name, root):
-    """Unpack any supported archive into root (safely: nothing may land outside it)."""
+    """Unpack any supported archive into root (safely: nothing may land outside it, and not too much)."""
     e = ext(name)
     os.makedirs(root, exist_ok=True)
     if e == ".zip":
         with zipfile.ZipFile(path) as z:
+            infos = z.infolist()
+            _too_big(sum(i.file_size for i in infos), len(infos))   # zipfile never reads past a member's stated size
             for n in z.namelist():
                 target = os.path.normpath(os.path.join(root, n))
                 if n.endswith("/") or not target.startswith(root + os.sep):
@@ -269,7 +277,11 @@ def _extract(log, path, name, root):
                     shutil.copyfileobj(src, dst)
     elif e in NATIVE_ARCHIVES:
         with tarfile.open(path) as t:
-            t.extractall(root, filter="data")  # the 'data' filter refuses links and paths outside root
+            members = t.getmembers()
+            _too_big(sum(m.size for m in members if m.isfile()), len(members))
+            # the 'data' filter refuses paths outside root and links pointing out of it (links inside it are
+            # allowed, and dropped by the walk below)
+            t.extractall(root, filter="data")
     else:
         tool = tools.need("7zip", "This kind of archive")
         if os.path.basename(tool) == "unar":
@@ -285,12 +297,14 @@ def _extract(log, path, name, root):
                                + ((r.stderr or r.stdout).strip().splitlines() or ["unknown error"])[-1][:300])
         # 7-Zip may still have written something outside root if the archive was malicious; it doesn't by
         # default (it strips absolute paths and ..), but drop anything that isn't a regular file inside root
-    names = []
+    names, total = [], 0
     for dirpath, _, files in os.walk(root):
         for f in files:
             full = os.path.join(dirpath, f)
             if os.path.islink(full) or not os.path.realpath(full).startswith(os.path.realpath(root) + os.sep):
                 continue
+            total += os.path.getsize(full)
+            _too_big(total, len(names))   # 7-Zip/unar formats can't be measured beforehand
             rel = os.path.relpath(full, root).replace(os.sep, "/")
             if "__MACOSX" in rel or os.path.basename(rel).startswith("."):
                 continue
@@ -298,9 +312,11 @@ def _extract(log, path, name, root):
     return names
 
 
-def prepare_archive(log, path, name, mode, vdir, quality="balanced"):
+def prepare_archive(log, path, name, mode, vdir, quality="balanced", depth=0):
     """An archive holding a saved website -> site; only pictures -> gallery (comic); a CHM -> site;
     otherwise each file is converted. Returns [(vdir, volume), ...]."""
+    if depth >= MAX_DEPTH:
+        raise RuntimeError(f"archives nested more than {MAX_DEPTH} deep aren't unpacked")
     stem = os.path.splitext(os.path.basename(name))[0]
     if stem.lower().endswith(".tar"):
         stem = stem[:-4]
@@ -332,15 +348,15 @@ def prepare_archive(log, path, name, mode, vdir, quality="balanced"):
         try:
             vols.append((sub, prepare_document(log, os.path.join(root, n), n, mode, sub)))
         except Exception as ex:  # noqa: BLE001
-            log(f"skipped {n}: {ex}")
+            log.warn(f"skipped {n}: {ex}")
     for n in names:  # archives inside the archive
         if kind(n) == "archive":
             k += 1
             sub = os.path.join(vdir, f"z{k}")
             try:
-                vols.extend(prepare_archive(log, os.path.join(root, n), n, mode, sub, quality))
+                vols.extend(prepare_archive(log, os.path.join(root, n), n, mode, sub, quality, depth + 1))
             except Exception as ex:  # noqa: BLE001
-                log(f"skipped {n}: {ex}")
+                log.warn(f"skipped {n}: {ex}")
     pics = [(os.path.join(root, n), n) for n in names if kind(n) == "image"]
     if pics and mode != "none":
         pdir = os.path.join(vdir, "pics")
@@ -352,7 +368,7 @@ def prepare_archive(log, path, name, mode, vdir, quality="balanced"):
             subs = [(os.path.join(root, n), n) for n in names if kind(n) == "subtitle"]
             vols.append((mdir, media.prepare(log, av, f"{stem}: audio and video", mdir, quality, subs)))
         except Exception as ex:  # noqa: BLE001
-            log(f"skipped the audio/video files: {ex}")
+            log.warn(f"skipped the audio/video files: {ex}")
     if not vols:
         raise RuntimeError("Nothing in this archive could be converted.")
     return vols

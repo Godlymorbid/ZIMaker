@@ -71,11 +71,24 @@ def _doc_title(raw):
 
 
 def prepare(log, path, mode, vdir, name=None):
-    z = zipfile.ZipFile(path)
-    container = ET.fromstring(z.read("META-INF/container.xml"))
-    opf_path = container.find(".//c:rootfile", NS).get("full-path")
-    opf_dir = posixpath.dirname(opf_path)
-    opf = ET.fromstring(z.read(opf_path))
+    try:
+        z = zipfile.ZipFile(path)
+    except zipfile.BadZipFile:
+        raise RuntimeError("This EPUB is damaged (it isn't a valid zip file).") from None
+    with z:
+        return _prepare(log, z, path, mode, vdir, name)
+
+
+def _prepare(log, z, path, mode, vdir, name):
+    try:
+        container = ET.fromstring(z.read("META-INF/container.xml"))
+        opf_path = container.find(".//c:rootfile", NS).get("full-path")
+        opf_dir = posixpath.dirname(opf_path)
+        opf = ET.fromstring(z.read(opf_path))
+    except (KeyError, AttributeError, ET.ParseError):
+        raise RuntimeError("This EPUB is damaged or unusual: its table of contents file (OPF) can't be read.") from None
+    if opf.find("opf:manifest", NS) is None or opf.find("opf:spine", NS) is None:
+        raise RuntimeError("This EPUB is damaged or unusual: it has no list of its chapters.")
     md = opf.find("opf:metadata", NS)
 
     def dc(tag):
@@ -87,18 +100,25 @@ def prepare(log, path, mode, vdir, name=None):
     for it in opf.find("opf:manifest", NS):
         manifest[it.get("id")] = {"href": _norm(opf_dir, it.get("href", "")), "media": it.get("media-type", ""),
                                   "props": it.get("properties", "")}
-    spine = [manifest[r.get("idref")]["href"] for r in opf.find("opf:spine", NS)
-             if r.get("idref") in manifest and manifest[r.get("idref")]["media"] in HTML_TYPES]
+    spine = list(dict.fromkeys(  # in reading order, each chapter once
+        manifest[r.get("idref")]["href"] for r in opf.find("opf:spine", NS)
+        if r.get("idref") in manifest and manifest[r.get("idref")]["media"] in HTML_TYPES))
 
     book = os.path.join(vdir, "book")
-    items = []
+    items, done = [], set()
     for it in manifest.values():
         if mode == "none" and it["media"].startswith("image/"):
+            continue
+        # one file listed twice (two ids, or "a.html" and "../a.html"), or a file called "index" (that name is the
+        # book's own contents page): ZIM paths must be unique, or the whole build fails
+        if it["href"] in done or it["href"] in ("index", "") or it["href"].endswith("/"):
             continue
         try:
             data = z.read(it["href"])
         except KeyError:
+            log.warn(f"[{name or os.path.basename(path)}] the book lists {it['href']}, but it's missing from the file")
             continue
+        done.add(it["href"])
         dest = os.path.join(book, it["href"])
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         with open(dest, "wb") as f:

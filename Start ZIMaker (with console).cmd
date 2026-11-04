@@ -8,7 +8,10 @@ set "ZD="
 if exist "%~dp0distro.txt" set /p ZD=<"%~dp0distro.txt"
 set "ZDA="
 if defined ZD set "ZDA=-d %ZD%"
-wsl.exe %ZDA% -e sh -c "python3 -I \"$(wslpath '%~dp0')app/server.py\""
+rem the folder reaches Linux as a variable WSL translates itself (/p), so names like O'Brien work
+set "ZDIR=%~dp0"
+set "WSLENV=ZDIR/p"
+wsl.exe %ZDA% -e sh -c "python3 -I \"${ZDIR%%/}/app/server.py\""
 echo.
 echo ZIMaker has stopped.
 pause

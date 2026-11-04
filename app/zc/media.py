@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 
 from . import common as C
 from . import tools
@@ -45,27 +46,44 @@ def _hms(sec):
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
+STALL = 600   # seconds without progress before a conversion counts as stuck
+
+
 def _run(log, cmd, total, label):
-    """Run FFmpeg, reporting progress from its -progress output."""
-    p = subprocess.Popen(cmd + ["-progress", "pipe:1", "-nostats", "-loglevel", "error"],
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    for line in p.stdout:
-        m = re.match(r"out_time_us=(\d+)", line)
-        if m and total:
-            log.stage(f"Converting {label}", min(int(int(m.group(1)) / 1e6), int(total)), int(total))
-    err = p.stderr.read()
-    if p.wait() != 0:
+    """Run FFmpeg, reporting progress from its -progress output. Its messages go to a file, not a pipe: a damaged
+    video can produce thousands of error lines, which would fill a pipe and freeze FFmpeg. A conversion that
+    makes no progress for STALL seconds is stopped."""
+    import tempfile
+    import threading
+    with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as errf:
+        p = subprocess.Popen(cmd + ["-progress", "pipe:1", "-nostats", "-loglevel", "error"],
+                             stdout=subprocess.PIPE, stderr=errf, text=True)
+        last = [time.time()]
+
+        def watch():
+            while p.poll() is None:
+                if time.time() - last[0] > STALL:
+                    p.kill()
+                    return
+                time.sleep(5)
+        threading.Thread(target=watch, daemon=True).start()
+        for line in p.stdout:
+            last[0] = time.time()
+            m = re.match(r"out_time_us=(\d+)", line)
+            if m and total:
+                log.stage(f"Converting {label}", min(int(int(m.group(1)) / 1e6), int(total)), int(total))
+        code = p.wait()
+        errf.seek(0)
+        err = errf.read()[-20000:]
+    if time.time() - last[0] > STALL:
+        raise RuntimeError(f"FFmpeg made no progress for {STALL // 60} minutes on this file and was stopped "
+                           "(the file may be damaged)")
+    if code != 0:
         raise RuntimeError("FFmpeg couldn't convert this file: " + (err.strip().splitlines() or ["unknown error"])[-1][:300])
 
 
 def _srt_to_vtt(src, dst):
-    raw = open(src, "rb").read()
-    for enc in ("utf-8-sig", "cp1252", "latin-1"):
-        try:
-            text = raw.decode(enc)
-            break
-        except UnicodeDecodeError:
-            continue
+    text = C.decode_text(open(src, "rb").read())
     if not text.lstrip().startswith("WEBVTT"):
         text = "WEBVTT\n\n" + re.sub(r"(\d\d:\d\d:\d\d),(\d\d\d)", r"\1.\2", text.replace("\r\n", "\n"))
     open(dst, "w", encoding="utf-8").write(text)
@@ -92,7 +110,7 @@ def prepare(log, items, title, vdir, quality="balanced", subtitles=()):
         try:
             info = probe(path) if ff else {"streams": [{"codec_type": "audio"}], "format": {}}  # MP3 without FFmpeg
         except Exception as e:  # noqa: BLE001
-            log(f"skipped {name}: {e}")
+            log.warn(f"skipped {name}: {e}")
             continue
         streams = info.get("streams", [])
         video = [s for s in streams if s.get("codec_type") == "video" and not s.get("disposition", {}).get("attached_pic")]
@@ -143,7 +161,7 @@ def prepare(log, items, title, vdir, quality="balanced", subtitles=()):
                      "poster": cover if os.path.exists(os.path.join(vdir, cover)) and os.path.getsize(os.path.join(vdir, cover)) else None,
                      "tracks": []}
         else:
-            log(f"skipped {name}: no audio or video in it")
+            log.warn(f"skipped {name}: no audio or video in it")
             continue
         pages.append({"label": label, "head": "", "body": "<p>" + "<br>".join(meta) + "</p>" if meta else "",
                       "image": None, "media": media})

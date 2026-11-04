@@ -34,7 +34,8 @@ SERVER = {}
 
 
 def busy():
-    return bool(QUEUE) or any(p.poll() is None for p in PROCS.values())
+    with LOCK:
+        return bool(QUEUE) or any(p.poll() is None for p in PROCS.values())
 
 
 def watchdog():
@@ -44,13 +45,16 @@ def watchdog():
     while True:
         time.sleep(5)
         try:
-            limit = settings.load()["stop_after"]
-        except Exception:  # noqa: BLE001
-            limit = IDLE_EXIT
-        if limit and time.time() - SEEN["t"] > limit and not busy() and SETUP["state"] != "installing":
-            print("Window closed and nothing running: stopping ZIMaker.", flush=True)
-            SERVER["srv"].shutdown()
-            return
+            try:
+                limit = settings.load()["stop_after"]
+            except Exception:  # noqa: BLE001
+                limit = IDLE_EXIT
+            if limit and time.time() - SEEN["t"] > limit and not busy() and SETUP["state"] != "installing":
+                print("Window closed and nothing running: stopping ZIMaker.", flush=True)
+                SERVER["srv"].shutdown()
+                return
+        except Exception as e:  # noqa: BLE001  never let the auto-stop die quietly
+            print(f"auto-stop check failed: {e}", flush=True)
 
 
 def setup_thread():
@@ -129,7 +133,7 @@ def clear_history():
         n += 1
     for name in (os.listdir(C.UPLOADS) if os.path.isdir(C.UPLOADS) else []):
         d = os.path.join(C.UPLOADS, name)
-        if not any(p.startswith(d + os.sep) for p in in_use) and not any(z["path"].startswith(d + os.sep) for z in ZIMS.values()):
+        if not any(p.startswith(d + os.sep) for p in in_use) and not any(z["path"].startswith(d + os.sep) for z in list(ZIMS.values())):
             shutil.rmtree(d, ignore_errors=True)
     if os.path.exists(LIBRARY):
         os.remove(LIBRARY)
@@ -267,8 +271,9 @@ def job_summary(jid):
     log = ""
     lp = os.path.join(d, "log.txt")
     if os.path.exists(lp):
-        with open(lp, encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
+        with open(lp, "rb") as f:  # only the end: this runs for every job, every 2 seconds
+            f.seek(max(0, os.path.getsize(lp) - 48_000))
+            lines = f.read().decode("utf-8", "replace").splitlines(keepends=True)
         log = "".join(ln for ln in lines[-200:] if not ln.startswith("Traceback") and not ln.startswith("  File"))
     return {"id": jid, "created": job.get("created", 0), "label": job.get("label", ""), "status": status,
             "stage": st.get("stage", "Waiting…"), "done": st.get("done"), "total": st.get("total"),
@@ -290,19 +295,28 @@ def new_job(body):
             else:
                 raise ValueError(f"{line.strip()}: {val}")
     for f in body.get("files", []):
-        if not os.path.abspath(f["path"]).startswith(C.UPLOADS):
+        # an uploaded copy: exactly one level inside the uploads folder (the runner removes that folder afterwards)
+        path = os.path.realpath(str(f.get("path", "")) if isinstance(f, dict) else "")
+        if os.path.dirname(os.path.dirname(path)) != os.path.realpath(C.UPLOADS) or not os.path.isfile(path):
             raise ValueError("bad file")
-        sources.append({"type": "file", "path": f["path"], "name": f.get("name")})
+        sources.append({"type": "file", "path": path, "name": f.get("name")})
     for p in body.get("paths", []):
-        wp = C.to_wsl(p)
+        try:
+            wp = C.to_wsl(str(p))
+        except Exception:  # noqa: BLE001  wslpath rejects some odd strings
+            raise ValueError(f"File not found: {p}") from None
         if not os.path.exists(wp):
             raise ValueError(f"File not found: {p}")
         sources.append({"type": "file", "path": wp, "name": os.path.basename(wp)})
     if not sources:
         raise ValueError("Add at least one web address or file.")
-    out_dir = (body.get("output_dir") or "").strip()
+    out_dir = str(body.get("output_dir") or "").strip()
     if not out_dir:
         raise ValueError("Choose an output folder.")
+    try:
+        max_pages = max(1, min(int(body.get("max_pages") or 300), 50000))
+    except (TypeError, ValueError):
+        raise ValueError("The page limit must be a number.") from None
     jid = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
     d = os.path.join(C.JOBS, jid)
     os.makedirs(d)
@@ -317,7 +331,7 @@ def new_job(body):
            "quality": prof["quality"], "sensitivity": prof["sensitivity"],
            # from the watched folder, with "delete each file after its ZIM is made" on
            "delete_sources": bool(body.get("delete_sources")),
-           "web": {"max_pages": int(body.get("max_pages") or 300),
+           "web": {"max_pages": max_pages,
                    "scope": body.get("scope") if body.get("scope") in ("section", "page") else "site",
                    "media": bool(prof.get("web_media")),
                    # the main screen's checkbox; the profile's setting if the window didn't send one
@@ -335,8 +349,11 @@ WATCH_STATE = os.path.join(C.HOME, "watch.json")   # what was already there: has
 PARTIAL = (".crdownload", ".part", ".partial", ".tmp", ".download", ".opdownload", ".aria2", ".!ut")
 
 
+WATCH_VERSION = 2   # v1 keys included the modified time: an old file merely touched (re-synced, say) looked new
+
+
 def _file_key(path, st):
-    return hashlib.sha1(f"{path}|{st.st_size}|{int(st.st_mtime)}".encode()).hexdigest()[:20]
+    return hashlib.sha1(f"{path}|{st.st_size}".encode()).hexdigest()[:20]
 
 
 def watch_once():
@@ -367,12 +384,14 @@ def watch_once():
             continue
         if os.path.isfile(p):
             files[p] = (n, s, _file_key(p, s))
-    if state.get("folder") != fid:
+    if state.get("folder") != fid or state.get("v") != WATCH_VERSION:
         # a newly watched folder: what's already in it stays as it is, only files added from now on are converted
-        state = {"folder": fid, "seen": sorted(k for _, _, k in files.values())}
+        state = {"v": WATCH_VERSION, "folder": fid, "seen": sorted(k for _, _, k in files.values())}
         json.dump(state, open(WATCH_STATE, "w", encoding="utf-8"))
         return []
-    seen, queued = set(state.get("seen", [])), []
+    before = set(state.get("seen", []))
+    present = {k for _, _, k in files.values()}
+    seen, queued = before & present, []   # forget files that are gone; never drop one that's still there
     for p, (n, s, k) in files.items():
         if k in seen:
             continue
@@ -389,8 +408,8 @@ def watch_once():
                                    "profile": st["active"], "delete_sources": w["delete"]}))
         except ValueError:
             pass
-    if queued or len(seen) != len(state.get("seen", [])):
-        state["seen"] = sorted(seen)[-5000:]
+    if seen != before:
+        state["seen"] = sorted(seen)
         json.dump(state, open(WATCH_STATE, "w", encoding="utf-8"))
     return queued
 
@@ -405,17 +424,22 @@ def watcher():
 
 
 def scheduler():
+    """Runs the queued jobs one at a time. A job is taken off the queue and started under the lock, so it's never in
+    neither place (Cancel, Remove and Clear history see it either waiting or running)."""
     while True:
         time.sleep(1)
         with LOCK:
-            busy = any(p.poll() is None for p in PROCS.values())
-            if busy or not QUEUE or SETUP["state"] != "ready":
+            running = any(p.poll() is None for p in list(PROCS.values()))
+            if running or not QUEUE or SETUP["state"] != "ready":
                 continue
             jid = QUEUE.pop(0)
-        d = os.path.join(C.JOBS, jid)
-        out = open(os.path.join(d, "runner.out"), "w")
-        PROCS[jid] = subprocess.Popen([sys.executable, "-I", os.path.join(APP, "zc", "runner.py"), d],
-                                      stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+            d = os.path.join(C.JOBS, jid)
+            try:
+                with open(os.path.join(d, "runner.out"), "w") as out:
+                    PROCS[jid] = subprocess.Popen([sys.executable, "-I", os.path.join(APP, "zc", "runner.py"), d],
+                                                  stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+            except OSError as e:  # its folder was removed meanwhile, or it couldn't start: skip it, keep scheduling
+                print(f"job {jid} couldn't start: {e}", flush=True)
 
 
 class H(BaseHTTPRequestHandler):
@@ -436,9 +460,30 @@ class H(BaseHTTPRequestHandler):
 
     def _body(self):
         n = int(self.headers.get("Content-Length") or 0)
-        return json.loads(self.rfile.read(n) or b"{}")
+        try:
+            body = json.loads(self.rfile.read(n) or b"{}")
+        except ValueError:
+            body = {}
+        return body if isinstance(body, dict) else {}
+
+    def _guard(self, changes):
+        """Only ZIMaker's own window may use it. Other web pages open in the same browser can also send requests to
+        127.0.0.1, so: the Host must be this server (a renamed host is someone else's page), and anything that changes
+        something must carry X-ZIMaker, a header other sites' pages can't add without permission this server never
+        gives (it answers no preflight requests)."""
+        port = self.server.server_address[1]
+        host = (self.headers.get("Host") or "").lower()
+        origin = self.headers.get("Origin")
+        ok_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        if host not in ok_hosts or (origin and origin.lower() not in {"http://" + h for h in ok_hosts}) or \
+                (changes and self.headers.get("X-ZIMaker") != "1"):
+            self._json({"error": "Not allowed: this request didn't come from ZIMaker's own window."}, 403)
+            return False
+        return True
 
     def do_GET(self):
+        if not self._guard(False):
+            return
         u = urllib.parse.urlparse(self.path)
         if u.path in ("/", "/index.html"):
             b = open(os.path.join(APP, "ui.html"), "rb").read()
@@ -556,6 +601,8 @@ class H(BaseHTTPRequestHandler):
             self.wfile.write(bytes(data[start:end + 1]))
 
     def do_PUT(self):
+        if not self._guard(True):
+            return
         u = urllib.parse.urlparse(self.path)
         if u.path != "/api/upload":
             return self._json({"error": "not found"}, 404)
@@ -577,6 +624,8 @@ class H(BaseHTTPRequestHandler):
         self._json({"path": path, "name": name, "size": os.path.getsize(path)})
 
     def do_POST(self):
+        if not self._guard(True):
+            return
         u = urllib.parse.urlparse(self.path)
         if u.path == "/api/inspect":
             from zc import ia, web
@@ -611,10 +660,14 @@ class H(BaseHTTPRequestHandler):
                     out.append({"input": line, "error": msg})
             return self._json({"items": out})
         if u.path == "/api/jobs":
+            body = self._body()
+            body.pop("delete_sources", None)   # deleting originals is only for the watched folder, never a web request
             try:
-                return self._json({"id": new_job(self._body())})
+                return self._json({"id": new_job(body)})
             except ValueError as e:
                 return self._json({"error": str(e)}, 400)
+            except Exception as e:  # noqa: BLE001
+                return self._json({"error": f"Couldn't start the job: {e}"}, 400)
         m = re.fullmatch(r"/api/jobs/([\w-]+)/(cancel|delete)", u.path)
         if m:
             jid, act = m.groups()
@@ -659,7 +712,8 @@ class H(BaseHTTPRequestHandler):
                 return self._json({"busy": True})
             with LOCK:
                 QUEUE.clear()
-            for jid, p in PROCS.items():
+                procs = list(PROCS.items())
+            for jid, p in procs:
                 if p.poll() is None:
                     os.killpg(p.pid, signal.SIGTERM)
                     C.Log(os.path.join(C.JOBS, jid)).stage("Cancelled (ZIMaker was closed)", status="cancelled")
@@ -667,7 +721,15 @@ class H(BaseHTTPRequestHandler):
             threading.Thread(target=lambda: (time.sleep(0.5), SERVER["srv"].shutdown()), daemon=True).start()
             return
         if u.path == "/api/open":
-            C.open_folder(self._body().get("path", ""))
+            # only ever a folder, or a ZIM file's folder: never anything that could be run or opened in a program
+            p = str(self._body().get("path", "")).strip()
+            try:
+                wp = C.to_wsl(p) if p else ""
+            except Exception:  # noqa: BLE001
+                wp = ""
+            if not wp or not (os.path.isdir(wp) or (wp.lower().endswith(".zim") and os.path.isfile(wp))):
+                return self._json({"error": "That folder doesn't exist."}, 400)
+            C.open_folder(p)
             return self._json({"ok": True})
         self._json({"error": "not found"}, 404)
 
@@ -694,11 +756,23 @@ def main():
     threading.Thread(target=watcher, daemon=True).start()
     if private():  # private mode: also catches anything left behind if ZIMaker didn't stop normally last time
         clear_history()
+    # stopped from outside (WSL shutting down, the system, Ctrl+C): still clean up below
+    signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=srv.shutdown, daemon=True).start())
     print(f"ZIMaker is running at http://127.0.0.1:{PORT}", flush=True)
-    srv.serve_forever()
-    if private():
-        time.sleep(1)  # let cancelled jobs finish exiting, so their folders go too
-        clear_history()
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if private():
+            with LOCK:
+                procs = list(PROCS.values())
+            for p in procs:  # cancelled jobs: wait until they've exited, so their folders can go too
+                try:
+                    p.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+            clear_history()
 
 
 if __name__ == "__main__":

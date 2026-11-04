@@ -46,7 +46,7 @@ It installs into your home folder, so it doesn't need root. It downloads the lib
 
 To remove it, run `sh ~/.local/share/zimaker/uninstall.sh`.
 
-Requirements: Python 3.9 or newer, which most distributions include, on a 64-bit Intel/AMD or ARM PC. If Chrome, Chromium, Edge or Brave is installed, the app opens in its own window; otherwise it opens in your default browser.
+Requirements: Python 3.11 or newer (Ubuntu 24.04, Debian 13, Fedora 39 and later include it), on a 64-bit Intel/AMD or ARM PC. If Chrome, Chromium, Edge or Brave is installed, the app opens in its own window; otherwise it opens in your default browser.
 
 ## Start it
 

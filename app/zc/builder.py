@@ -1,5 +1,6 @@
 """Write prepared volumes into a ZIM file and validate it."""
 import datetime
+import hashlib
 import html
 import mimetypes
 import os
@@ -73,10 +74,31 @@ def _rel(target, from_path):
 VOID = "area|base|br|col|embed|hr|img|input|link|meta|source|track|wbr|image|path|rect|circle|line|polygon|polyline|ellipse|use|stop"
 
 
+def _read_markup(path):
+    """An (X)HTML file's text in its own encoding: byte-order mark, then the XML declaration, then <meta charset>."""
+    data = open(path, "rb").read()
+    for bom, enc in ((b"\xef\xbb\xbf", "utf-8-sig"), (b"\xff\xfe", "utf-16"), (b"\xfe\xff", "utf-16")):
+        if data.startswith(bom):
+            return data.decode(enc, "replace")
+    m = (re.match(rb"""\s*<\?xml[^>]*encoding\s*=\s*["']([\w.-]+)""", data)
+         or re.search(rb"""<meta[^>]+charset\s*=\s*["']?([\w.-]+)""", data[:4096], re.I))
+    try:
+        return data.decode(m.group(1).decode("ascii") if m else "utf-8", "replace")
+    except LookupError:
+        return data.decode("utf-8", "replace")
+
+
+def _href(path):
+    """A relative link as it must appear in a page (#, ?, %, spaces in file names encoded)."""
+    return urllib.parse.quote(path, safe="/-._~!$()*+,;=@")
+
+
 def _xhtml_to_html(raw):
     raw = re.sub(r"^\s*<\?xml[^>]*\?>", "", raw)
     # <div/> is legal XHTML but opens a never-closed element in HTML
     raw = re.sub(rf"<(?!(?:{VOID})\b)([a-zA-Z][\w:-]*)(\s[^<>]*?)?\s*/>", r"<\1\2></\1>", raw)
+    # the text is stored as UTF-8 now, whatever the book declared
+    raw = re.sub(r"<meta[^>]+charset[^>]*>", '<meta charset="utf-8">', raw, flags=re.I)
     if not re.search(r"<meta[^>]+charset", raw, re.I):
         raw = re.sub(r"(<head[^>]*>)", r'\1<meta charset="utf-8">', raw, count=1, flags=re.I)
     return raw
@@ -130,7 +152,10 @@ def build(log, volumes, out_path, title=None):
             c.add_illustration(48, _icon())                 # libzim 3: (size, content)
         meta = {
             "Title": C.clip(title, 30),
-            "Name": C.slug(title, 50),
+            # Kiwix treats ZIMs with the same Name as versions of one book; non-Latin titles all slug to "book", so a
+            # short fingerprint of the title and sources keeps different books apart
+            "Name": C.slug(title, 42) + "_" + hashlib.sha1(
+                (title + "|" + "|".join(v.get("source", "") for _, v in volumes)).encode()).hexdigest()[:6],
             "Language": lang,
             "Creator": C.clip(v0.get("creator") or "Unknown", 200),
             "Publisher": C.clip(v0.get("publisher") or "ZIMaker", 200),
@@ -300,7 +325,7 @@ def _emit_epub(c, It, vdir, vol, pre, multi):
         src = os.path.join(book, it["path"])
         zpath = pre + it["path"]
         if it["media"] in ("application/xhtml+xml", "text/html"):
-            raw = open(src, encoding="utf-8", errors="replace").read()
+            raw = _read_markup(src)
             if vol.get("drop_images"):
                 raw = re.sub(r"<img\b[^>]*>", "", raw, flags=re.I)
                 raw = re.sub(r"<svg\b.*?</svg>", "", raw, flags=re.I | re.S)
@@ -308,9 +333,9 @@ def _emit_epub(c, It, vdir, vol, pre, multi):
             i = pos.get(it["path"])
             if i is not None:
                 links = []
-                links.append(f'<a href="{_rel(pre + spine[i - 1], zpath)}">← Previous</a>' if i else "<span></span>")
-                links.append(f'<a href="{_rel(index_path, zpath)}">Contents</a>')
-                links.append(f'<a href="{_rel(pre + spine[i + 1], zpath)}">Next →</a>' if i + 1 < len(spine)
+                links.append(f'<a href="{_href(_rel(pre + spine[i - 1], zpath))}">← Previous</a>' if i else "<span></span>")
+                links.append(f'<a href="{_href(_rel(index_path, zpath))}">Contents</a>')
+                links.append(f'<a href="{_href(_rel(pre + spine[i + 1], zpath))}">Next →</a>' if i + 1 < len(spine)
                              else "<span></span>")
                 bar = f'<div style="{NAV_STYLE}">{"".join(links)}</div>'
                 raw = re.sub(r"(<body[^>]*>)", r"\1" + bar.replace("\\", "\\\\"), raw, count=1, flags=re.I)
@@ -324,12 +349,12 @@ def _emit_epub(c, It, vdir, vol, pre, multi):
             compress = not it["media"].startswith(("image/", "font/", "audio/", "video/"))
             c.add_item(It(zpath, "", it["media"] or "application/octet-stream", file=src, compress=compress))
     entries = "".join(
-        f'<li class="d{min(e.get("depth", 0), 2)}"><a href="{html.escape(_rel(pre + e["href"].split("#")[0], index_path) + ("#" + e["href"].split("#", 1)[1] if "#" in e["href"] else ""))}">'
+        f'<li class="d{min(e.get("depth", 0), 2)}"><a href="{html.escape(_href(_rel(pre + e["href"].split("#")[0], index_path)) + ("#" + e["href"].split("#", 1)[1] if "#" in e["href"] else ""))}">'
         f'{html.escape(e["label"])}</a></li>' for e in vol["toc"] if e["href"].split("#")[0] in have)
     back = '<nav class="pg"><a href="../index">All books</a></nav>' if multi else ""
     info = " · ".join(x for x in (vol.get("creator"), vol.get("date")) if x)
     body = (f"{back}<h1>{html.escape(vol['title'])}</h1>" + (f"<p>{html.escape(info)}</p>" if info else "")
-            + (f'<p><a href="{html.escape(_rel(pre + spine[0], index_path))}">Start reading →</a></p>' if spine else "")
+            + (f'<p><a href="{html.escape(_href(_rel(pre + spine[0], index_path)))}">Start reading →</a></p>' if spine else "")
             + f'<ul class="toc">{entries}</ul>')
     c.add_item(It(index_path, vol["title"], "text/html", _doc(vol["title"], body, "../style.css"), front=True))
     return len(spine)
@@ -339,7 +364,11 @@ def check(log, path):
     """Validate with zimcheck when available, else libzim's own integrity check."""
     zc = deps.zimcheck_path()
     if zc:
-        out = subprocess.run([zc, "-A", path], capture_output=True, text=True).stdout
+        try:
+            out = subprocess.run([zc, "-A", path], capture_output=True, text=True, timeout=3 * 3600).stdout
+        except subprocess.TimeoutExpired:
+            log("validation took too long (over 3 hours) and was stopped; the ZIM is saved but unchecked")
+            return "unchecked"
         errors = [ln for ln in out.splitlines() if "[ERROR]" in ln]
         if "Overall Test Status: Pass" in out:
             log("validation passed (zimcheck)")

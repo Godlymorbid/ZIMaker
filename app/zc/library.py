@@ -205,12 +205,12 @@ def librivox(log, url, mode, vdir, quality):
         [i for i in re.findall(r"archive\.org/(?:details|download)/([\w.-]+)", page) if not i.lower().startswith("librivoxplainvanilla")]
     if not idents:
         raise RuntimeError("Couldn't find this audiobook's files (is the link to a LibriVox book page?).")
-    meta = C.get_json(f"https://archive.org/metadata/{urllib.parse.quote(idents[0])}")
     out = []
-    if mode != "none":
+    if mode != "none":  # text-only: no audio, so its details aren't even fetched
+        meta = C.get_json(f"https://archive.org/metadata/{urllib.parse.quote(idents[0])}")
         os.makedirs(vdir + "-audio", exist_ok=True)
         out.append((vdir + "-audio", archive_audio(log, idents[0], meta, vdir + "-audio", quality)))
-    book = re.search(r"gutenberg\.org/(?:ebooks|etext)/(\d+)", page)
+    book = re.search(r"gutenberg\.org/(?:ebooks|etext|files|cache/epub)/(\d+)", page)
     if book:
         os.makedirs(vdir + "-text", exist_ok=True)
         try:
@@ -245,32 +245,50 @@ def _meta(m, *keys):
     return ""
 
 
+def _list(v):
+    """IIIF fields may hold one thing or a list of them."""
+    return v if isinstance(v, list) else [v] if v else []
+
+
+def _id(v):
+    """The address of a IIIF thing: a plain string, or an object with id / @id."""
+    if isinstance(v, str):
+        return v
+    return (v.get("id") or v.get("@id") or "") if isinstance(v, dict) else ""
+
+
+def _service(res):
+    """The image service base address of an image resource ('' if none). Some give '.../info.json'."""
+    svc = next((s for s in _list(res.get("service")) if _id(s)), None)
+    base = _id(svc) if svc else ""
+    return re.sub(r"/info\.json$", "", base).rstrip("/")
+
+
 def _canvases(m):
-    """[(label, image URL at width w -> str, text links)] for a v2 or v3 manifest."""
+    """[(label, image service, full image address, text links)] for a v2 or v3 manifest. A canvas that can't be
+    read is skipped rather than failing the whole book."""
     out = []
     if "items" in m:  # v3
-        for c in m["items"]:
+        for c in _list(m["items"]):
             try:
-                body = c["items"][0]["items"][0]["body"]
-            except (KeyError, IndexError, TypeError):
+                body = _list(c["items"][0]["items"][0]["body"])[0]
+                if body.get("type") == "Choice":  # alternatives (e.g. colour / infrared): the first
+                    body = _list(body.get("items"))[0]
+                out.append((_label(c.get("label")), _service(body), _id(body),
+                            _list(c.get("seeAlso")) + _list(c.get("rendering"))))
+            except (KeyError, IndexError, TypeError, AttributeError):
                 continue
-            body = body[0] if isinstance(body, list) else body
-            svc = body.get("service") or []
-            svc = svc[0] if isinstance(svc, list) and svc else svc if isinstance(svc, dict) else {}
-            out.append((_label(c.get("label")), svc.get("id") or svc.get("@id"), body.get("id"),
-                        (c.get("seeAlso") or []) + (c.get("rendering") or [])))
     else:             # v2
-        for s in m.get("sequences", [])[:1]:
-            for c in s.get("canvases", []):
+        for s in _list(m.get("sequences"))[:1]:
+            for c in _list(s.get("canvases")):
                 try:
-                    res = c["images"][0]["resource"]
-                except (KeyError, IndexError, TypeError):
+                    res = _list(c["images"])[0]["resource"]
+                    if res.get("@type") == "oa:Choice":
+                        res = res.get("default") or _list(res.get("item"))[0]
+                    out.append((_label(c.get("label")), _service(res), _id(res),
+                                _list(c.get("seeAlso")) + _list(c.get("rendering"))))
+                except (KeyError, IndexError, TypeError, AttributeError):
                     continue
-                svc = res.get("service") or {}
-                svc = svc[0] if isinstance(svc, list) and svc else svc
-                links = c.get("seeAlso") or []
-                links = links if isinstance(links, list) else [links]
-                out.append((_label(c.get("label")), svc.get("@id") or svc.get("id"), res.get("@id"), links))
     return out
 
 
@@ -279,8 +297,10 @@ def _text_from(links):
     for link in links:
         if isinstance(link, str):
             link = {"@id": link}
-        url = link.get("@id") or link.get("id") or ""
-        fmt = (link.get("format") or "") + " " + str(link.get("profile") or "") + " " + url
+        if not isinstance(link, dict):
+            continue
+        url = _id(link)
+        fmt = str(link.get("format") or "") + " " + str(link.get("profile") or "") + " " + url
         try:
             if re.search(r"alto", fmt, re.I):
                 root = ET.fromstring(C.get_text(url, timeout=60).encode())
@@ -296,40 +316,63 @@ def _text_from(links):
     return ""
 
 
+class NotLibrary(Exception):
+    """The link looked like a library's (e.g. ends in /manifest) but isn't one: crawl it as a website instead."""
+
+
+def _iiif_page(args):
+    """One IIIF page: its text, and its scan saved as WebP. Returns the page dict."""
+    from PIL import Image
+    from . import images
+    i, (label, svc, full, links), mode, vdir, log = args
+    page = {"label": label, "text": _text_from(links)}
+    if mode == "none":
+        return page
+    # the scan at ZIMaker's width; servers that won't scale (or upscale) get asked for their own size; then the
+    # plain image address
+    tries = [f"{svc}/full/{images.SCAN_WIDTH},/0/default.jpg", f"{svc}/full/max/0/default.jpg",
+             f"{svc}/full/full/0/default.jpg"] if svc else []
+    tries += [full] if full else []
+    tmp = os.path.join(vdir, "download", f"{i}.jpg")
+    for src in tries:
+        try:
+            _fetch(src, tmp)
+            images.save_scan(Image.open(tmp), os.path.join(vdir, "img", f"{i}.webp"))
+            page["image"] = f"img/{i}.webp"
+            break
+        except Exception:  # noqa: BLE001  try the next form of the address
+            pass
+        finally:
+            for x in (tmp, tmp + ".ok"):
+                if os.path.exists(x):
+                    os.remove(x)
+    if "image" not in page:
+        log.warn(f"page {i} ({label or 'no label'}) couldn't be downloaded")
+    return page
+
+
 def iiif(log, url, mode, vdir):
     """A IIIF manifest -> a volume of page scans (and text where the library provides it)."""
     C.use_lib()
-    from PIL import Image
-    from . import ia, images
-    m = C.get_json(url)
-    if not isinstance(m, dict) or not ("sequences" in m or "items" in m):
-        raise RuntimeError("This link isn't a IIIF manifest.")
+    from concurrent.futures import ThreadPoolExecutor
+    from . import ia
+    m = C.get_json_small(url, limit=50_000_000, timeout=60)
+    if not isinstance(m, dict) or not ("sequences" in m or "items" in m) or "iiif.io" not in json.dumps(m.get("@context", "")):
+        raise NotLibrary(url)
     title = C.clip(_label(m.get("label")) or "Untitled", 200)
     canvases = _canvases(m)
     if not canvases:
-        raise RuntimeError("This IIIF manifest has no pages.")
+        raise RuntimeError("This IIIF manifest has no pages ZIMaker can read.")
     log(f"[{title}] {len(canvases)} pages from {_host(url)}")
     if mode == "pictures":
         log(f"[{title}] page scans have no word positions here, so every page is kept as an image")
     os.makedirs(os.path.join(vdir, "img"), exist_ok=True)
     pages = []
-    for i, (label, svc, full, links) in enumerate(canvases, 1):
-        log.stage(f"Downloading pages: {title}", i - 1, len(canvases))
-        text = _text_from(links)
-        page = {"label": label, "text": text}
-        if mode != "none":
-            src = f"{svc.rstrip('/')}/full/{images.SCAN_WIDTH},/0/default.jpg" if svc else full
-            tmp = os.path.join(vdir, "download", f"{i}.jpg")
-            try:
-                _fetch(src, tmp)
-                images.save_scan(Image.open(tmp), os.path.join(vdir, "img", f"{i}.webp"))
-                page["image"] = f"img/{i}.webp"
-            except Exception as e:  # noqa: BLE001
-                log(f"[{title}] page {i} couldn't be downloaded: {e}")
-            for x in (tmp, tmp + ".ok"):
-                if os.path.exists(x):
-                    os.remove(x)
-        pages.append(page)
+    # four pages at a time: much faster than one by one, and still gentle on the library's servers
+    with ThreadPoolExecutor(4) as pool:
+        for page in pool.map(_iiif_page, [(i, c, mode, vdir, log) for i, c in enumerate(canvases, 1)]):
+            pages.append(page)
+            log.stage(f"Downloading pages: {title}", len(pages), len(canvases))
     if mode == "none" and not any(p["text"].strip() for p in pages):
         raise RuntimeError("This book has no text, only page scans, so text-only mode has nothing to keep.")
     info = {"creator": _meta(m, "author", "creator", "contributor") or _meta(m, "publisher"),

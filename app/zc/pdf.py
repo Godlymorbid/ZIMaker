@@ -18,28 +18,38 @@ def _doc(path):
 
 
 def _page_job(a):
+    """One page: its text, and its image when it has a picture (or every page, in 'all' mode). A page that fails
+    is returned with the reason instead of failing the whole document."""
+    path, i, mode, out = a
+    try:
+        return _page(path, i, mode, out) + (None,)
+    except Exception as e:  # noqa: BLE001
+        return i, "", "", False, str(e)
+
+
+def _page(path, i, mode, out):
     C.use_lib()
     import pymupdf
     from PIL import Image
     from . import images
-    path, i, mode, out = a
     page = _doc(path)[i]
     blocks = page.get_text("blocks")
     text = "\n\n".join(b[4].strip() for b in blocks if len(b) > 6 and b[6] == 0 and b[4].strip())
-    W, H = page.rect.width, page.rect.height
+    W, H = page.rect.width or 1, page.rect.height or 1
     try:
         label = page.get_label() or ""
     except Exception:  # noqa: BLE001
         label = ""
     fig = mode == "all"
-    if mode == "pictures":
+    # a page with neither images nor drawings is only text: no picture to look for (most pages of born-digital PDFs)
+    if mode == "pictures" and (page.get_images() or page.get_drawings()):
         words = [tuple(w[:4]) for w in page.get_text("words")]
-        z = 600 / W
+        z = min(600 / W, 8000 / H)   # very tall pages: keep the detection image a sane size
         pix = page.get_pixmap(matrix=pymupdf.Matrix(z, z), colorspace=pymupdf.csGRAY, alpha=False)
         fig = images.is_picture(Image.frombytes("L", (pix.width, pix.height), pix.samples), W, H, words)
     has = False
     if fig:
-        z = images.SCAN_WIDTH / W
+        z = min(images.SCAN_WIDTH / W, images.MAX_SIDE / H)
         pix = page.get_pixmap(matrix=pymupdf.Matrix(z, z), alpha=False)
         images.save_scan(Image.frombytes("RGB", (pix.width, pix.height), pix.samples), out)
         has = True
@@ -65,8 +75,10 @@ def prepare(log, path, mode, vdir, name=None):
     results, batch = {}, []
 
     def run(pool):
-        for i, label, text, has in pool.map(_page_job, batch):
+        for i, label, text, has, err in pool.map(_page_job, batch):
             results[i] = (label, text, has)
+            if err:
+                log.warn(f"[{title}] page {i + 1} couldn't be read: {err}")
         batch.clear()
 
     with ProcessPoolExecutor(C.WORKERS) as pool:

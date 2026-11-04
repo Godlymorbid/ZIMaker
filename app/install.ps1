@@ -20,11 +20,17 @@ Write-Host "Turns websites, archive.org books, ebooks, documents and pictures in
 #    since WSL distributions belong to the Windows account that installs them.
 Step "Checking WSL (Windows Subsystem for Linux)"
 $env:WSL_UTF8 = '1'   # plain text from wsl.exe instead of UTF-16
-function Wsl-On { try { & wsl.exe --status *> $null; return ($LASTEXITCODE -eq 0) } catch { return $false } }
+# In these helpers a warning wsl.exe prints (on its error output) must not count as a failure: the script's 'Stop'
+# setting would otherwise turn any such line into an error and lose the real answer.
+function Wsl-On {
+  $ErrorActionPreference = 'Continue'
+  try { & wsl.exe --status *> $null; return ($LASTEXITCODE -eq 0) } catch { return $false }
+}
 
 # The user's distributions, from "wsl -l -v" (its header line is translated, so skip it; the default has a *).
 # Docker's and Rancher's internal ones can't run ZIMaker, so don't even start them.
 function Get-Distros {
+  $ErrorActionPreference = 'Continue'
   $lines = try { @(& wsl.exe -l -v 2>$null) } catch { @() }
   if ($LASTEXITCODE -ne 0) { return @() }
   $list = @()
@@ -40,8 +46,9 @@ function Get-Distros {
 
 # Can ZIMaker run in this distribution? $null if it doesn't start (or is Alpine, whose libraries ZIMaker's don't fit).
 $probe = '[ -f /etc/alpine-release ] && echo zc-alpine && exit 0; command -v apt-get >/dev/null 2>&1 && a=apt || a=noapt; ' +
-         'python3 -c ''import sys; sys.exit(sys.version_info < (3, 9))'' >/dev/null 2>&1 && p=py || p=nopy; echo zc-$a-$p'
+         'python3 -c ''import sys; sys.exit(sys.version_info < (3, 11))'' >/dev/null 2>&1 && p=py || p=nopy; echo zc-$a-$p'
 function Test-Distro($n) {
+  $ErrorActionPreference = 'Continue'
   $o = try { (& wsl.exe -d $n -e sh -c $probe 2>$null) -join '' } catch { '' }
   if ($o -match 'zc-(apt|noapt)-(py|nopy)') { return [pscustomobject]@{ Apt = ($Matches[1] -eq 'apt'); Python = ($Matches[2] -eq 'py') } }
   return $null
@@ -88,6 +95,8 @@ if (-not $all.Count) {
   }
 
   # WSL is on but has no Linux: install Ubuntu for this user, right here in this window.
+  # (Never during an update: it runs hidden, and Ubuntu's first start waits for a username nobody can type.)
+  if ($Quiet) { Fail "WSL shows no Linux distribution right now, so the update stopped. Run 'Install ZIMaker' to fix it." }
   Write-Host "WSL is on, but there's no Linux installed for your account yet."
   if (-not (Ask "Install Ubuntu now? (about 500 MB download, no administrator needed)")) {
     Fail "ZIMaker needs a Linux distribution in WSL. You can install one later with:  wsl --install -d Ubuntu"
@@ -100,7 +109,12 @@ if (-not $all.Count) {
 $saved = if (Test-Path $DistroFile) { "$(Get-Content $DistroFile -TotalCount 1)".Trim() } else { '' }
 if (-not $Distro -and $saved -and (@($all.Name) -contains $saved)) {
   $r = Test-Distro $saved
-  if ($r -and $r.Python) { $Distro = $saved; $Ours = @(Get-Content $DistroFile) -contains 'installed-by-zimaker' }
+  # an update keeps it even if this one check failed (a slow start, say): switching would leave the user's
+  # settings and history behind in the other one
+  if (($r -and $r.Python) -or $Quiet) { $Distro = $saved; $Ours = @(Get-Content $DistroFile) -contains 'installed-by-zimaker' }
+}
+if (-not $Distro -and $saved -and $Quiet) {
+  Fail "The Linux distribution ZIMaker uses ($saved) isn't there any more, so the update stopped. Run 'Install ZIMaker' to choose another."
 }
 if (-not $Distro) {
   Write-Host "Checking your Linux distributions in WSL..."
@@ -108,7 +122,7 @@ if (-not $Distro) {
   foreach ($d in $all) {
     $r = Test-Distro $d.Name
     if (-not $r) { Write-Host "  $($d.Name): can't run ZIMaker"; continue }
-    if (-not $r.Python -and -not $r.Apt) { Write-Host "  $($d.Name): has no Python 3.9 or newer"; continue }
+    if (-not $r.Python -and -not $r.Apt) { Write-Host "  $($d.Name): has no Python 3.11 or newer"; continue }
     # best first: ready Debian/Ubuntu, then Debian/Ubuntu missing Python, then others; within those, the default, then Ubuntu
     $kind = if (-not $r.Apt) { 2 } elseif (-not $r.Python) { 1 } else { 0 }
     $pref = if ($d.Default) { 0 } elseif ($d.Name -match '^Ubuntu') { 1 } else { 2 }
@@ -159,7 +173,7 @@ if (-not $Distro) {
       Write-Host "Adding Python to $Distro (its package manager, as root)..."
       & wsl.exe -d $Distro -u root -- sh -c "apt-get update && apt-get install -y python3"
       $r = Test-Distro $Distro
-      if (-not ($r -and $r.Python)) { Fail "Couldn't install Python in $Distro. Open it and run:  sudo apt install python3  then run 'Install ZIMaker' again." }
+      if (-not ($r -and $r.Python)) { Fail "$Distro has no Python 3.11 or newer, even after installing it (Ubuntu 22.04 and Debian 11 are too old). Choose another distribution, or let ZIMaker install a current Ubuntu: run 'Install ZIMaker' again and pick U." }
     }
   }
 }
@@ -168,7 +182,7 @@ Write-Host "WSL is ready. ZIMaker will run in: $Distro"
 
 # 3. Stop a running copy (upgrade), then copy the files
 Step "Installing to $Dest"
-try { Invoke-WebRequest -UseBasicParsing -Method POST -Body '{"force": true}' 'http://127.0.0.1:8765/api/quit' -TimeoutSec 3 | Out-Null; Start-Sleep 2 } catch {}
+try { Invoke-WebRequest -UseBasicParsing -Method POST -Headers @{ 'X-ZIMaker' = '1' } -Body '{"force": true}' 'http://127.0.0.1:8765/api/quit' -TimeoutSec 3 | Out-Null; Start-Sleep 2 } catch {}
 if ($Source -ne $Dest) {
   New-Item -ItemType Directory -Force $Dest | Out-Null
   foreach ($item in Get-ChildItem $Source -Force) {

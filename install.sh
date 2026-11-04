@@ -13,8 +13,8 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "Python 3 is needed. Install it with your package manager, e.g.:  sudo apt install python3" >&2
   exit 1
 fi
-if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)'; then
-  echo "Python 3.9 or newer is needed (found $(python3 --version 2>&1))." >&2
+if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'; then
+  echo "Python 3.11 or newer is needed (found $(python3 --version 2>&1))." >&2
   exit 1
 fi
 case "$(uname -m)" in
@@ -23,7 +23,7 @@ case "$(uname -m)" in
 esac
 
 # stop a running copy (when upgrading)
-python3 -c "import urllib.request; urllib.request.urlopen(urllib.request.Request('http://localhost:8765/api/quit', data=b'{\"force\": true}', method='POST'), timeout=3)" >/dev/null 2>&1 && sleep 2 || true
+python3 -c "import urllib.request; urllib.request.urlopen(urllib.request.Request('http://localhost:8765/api/quit', data=b'{\"force\": true}', method='POST', headers={'X-ZIMaker': '1'}), timeout=3)" >/dev/null 2>&1 && sleep 2 || true
 
 echo "== Installing to $DEST"
 mkdir -p "$DEST"

@@ -2,12 +2,14 @@
 import functools
 import html
 import http.client
+import ipaddress
 import json
 import ntpath
 import os
 import re
 import shutil
 import socket
+import ssl
 import struct
 import subprocess
 import sys
@@ -45,6 +47,7 @@ class Log:
 
     def __init__(self, job_dir):
         self.dir = job_dir
+        self.warnings = []   # something was left out (a page, a message, a file): the ZIM isn't the whole original
         os.makedirs(job_dir, exist_ok=True)
 
     def __call__(self, msg):
@@ -52,6 +55,11 @@ class Log:
         with open(os.path.join(self.dir, "log.txt"), "a", encoding="utf-8") as f:
             f.write(line + "\n")
         print(line, flush=True)
+
+    def warn(self, msg):
+        """Log something that was left out; the job then never deletes its original (watched folder)."""
+        self.warnings.append(str(msg))
+        self(f"WARNING: {msg}")
 
     def stage(self, text, done=None, total=None, status="running"):
         tmp = os.path.join(self.dir, "state.tmp")
@@ -102,7 +110,9 @@ def _socks_connect(p, host, port, timeout):
     try:
         login = bool(p["user"])
         s.sendall(b"\x05\x01" + (b"\x02" if login else b"\x00"))
-        method = _recv(s, 2)[1]
+        ver, method = _recv(s, 2)
+        if ver != 5:
+            raise OSError("that address isn't a SOCKS5 proxy")
         if method == 2 and login:
             u, pw = p["user"].encode()[:255], p["password"].encode()[:255]
             s.sendall(b"\x01" + bytes([len(u)]) + u + bytes([len(pw)]) + pw)
@@ -110,9 +120,19 @@ def _socks_connect(p, host, port, timeout):
                 raise OSError("the SOCKS proxy didn't accept the username or password")
         elif method != 0:
             raise OSError("the SOCKS proxy wants a login (set a username and password in Settings)")
-        name = host.strip("[]").encode("idna")
-        s.sendall(b"\x05\x01\x00\x03" + bytes([len(name)]) + name + struct.pack(">H", port))
+        h = host.strip("[]")
+        try:  # an address: sent as one; a name: sent as a name, for the proxy to look up (no local DNS)
+            ip = ipaddress.ip_address(h)
+            dest = (b"\x01" if ip.version == 4 else b"\x04") + ip.packed
+        except ValueError:
+            name = h.encode("idna")
+            if len(name) > 255:
+                raise OSError(f"the web address's name is too long: {h[:60]}…") from None
+            dest = b"\x03" + bytes([len(name)]) + name
+        s.sendall(b"\x05\x01\x00" + dest + struct.pack(">H", port))
         reply = _recv(s, 4)
+        if reply[0] != 5:
+            raise OSError("the SOCKS proxy sent an invalid reply")
         if reply[1] != 0:
             why = {2: "not allowed by the proxy", 3: "network unreachable", 4: "host unreachable",
                    5: "connection refused", 6: "timed out"}.get(reply[1], f"SOCKS error {reply[1]}")
@@ -209,20 +229,32 @@ class _NoOnion(urllib.request.BaseHandler):
     http_open = https_open = _check
 
 
+class _WebOnly(urllib.request.BaseHandler):
+    """ZIMaker only ever downloads http/https addresses. Others come from the web too (a link in a page or a IIIF
+    manifest), and file:// would read the computer's own files (urllib also looks its host name up locally)."""
+    handler_order = 80
+
+    def _refuse(self, req):
+        raise urllib.error.URLError(f"ZIMaker only downloads web addresses (http/https), not {req.type}: links")
+
+    file_open = ftp_open = data_open = _refuse
+
+
 def proxy_opener(p):
     """A urllib opener that sends everything through proxy p (and nothing around it)."""
     if p["type"] == "off":
-        return urllib.request.build_opener(_NoOnion())
+        return urllib.request.build_opener(_WebOnly(), _NoOnion())
     why = _proxy_problem(p)
     if why:
-        return urllib.request.build_opener(_Refuse(why))
+        return urllib.request.build_opener(_WebOnly(), _Refuse(why))
     if p["type"] == "http":
         login = (urllib.parse.quote(p["user"], safe="") + ":" + urllib.parse.quote(p["password"], safe="") + "@"
                  if p["user"] else "")
         url = f"http://{login}{p['host']}:{p['port']}"
-        return urllib.request.build_opener(urllib.request.ProxyHandler({"http": url, "https": url}), _Refuse(), _NoOnion())
+        return urllib.request.build_opener(urllib.request.ProxyHandler({"http": url, "https": url}), _WebOnly(),
+                                           _Refuse(), _NoOnion())
     return urllib.request.build_opener(urllib.request.ProxyHandler({}), _SocksHandler(p), _SocksHTTPSHandler(p),
-                                       _Refuse())
+                                       _WebOnly(), _Refuse())
 
 
 def net_init(p=None):
@@ -267,6 +299,18 @@ def get_json(url, timeout=60):
         return json.load(r)
 
 
+def get_json_small(url, limit=5_000_000, timeout=30):
+    """The JSON at url, if it answers with JSON of at most `limit` bytes; else None (it's something else)."""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout) as r:
+            if "json" not in (r.headers.get("Content-Type") or "").lower():
+                return None
+            data = r.read(limit + 1)
+        return json.loads(data) if len(data) <= limit else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def get_text(url, timeout=60):
     with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout) as r:
         return r.read().decode("utf-8", "replace")
@@ -291,9 +335,13 @@ def _download_py(url, dest, log, label, size):
         except urllib.error.HTTPError as e:
             if e.code == 416:  # already complete
                 return dest
-            if attempt == 7:
-                raise
-        except (urllib.error.URLError, TimeoutError, OSError):
+            if attempt == 7 or not (e.code in (408, 425, 429) or e.code >= 500):
+                raise   # not found, forbidden...: trying again won't change it
+        except urllib.error.URLError as e:
+            if attempt == 7 or isinstance(e.reason, ssl.SSLCertVerificationError) or "can't be used" in str(e.reason) \
+                    or "only downloads web" in str(e.reason) or "onion site" in str(e.reason):
+                raise   # a bad certificate or a refused address won't fix itself
+        except (TimeoutError, OSError):
             if attempt == 7:
                 raise
         time.sleep(10)
@@ -304,6 +352,8 @@ def download(url, dest, log=None, label="", size=0):
     """Resumable download (curl if available); a .ok marker records completion."""
     if os.path.exists(dest + ".ok"):
         return dest
+    if urllib.parse.urlsplit(url).scheme.lower() not in ("http", "https"):
+        raise RuntimeError(f"ZIMaker only downloads web addresses (http/https): {url[:80]}")
     if PROXY and _proxy_problem(PROXY):
         raise RuntimeError(f"The proxy can't be used: {_proxy_problem(PROXY)}. Check ⚙ Settings → Connection and privacy.")
     if is_onion(url) and not onion_ok():
@@ -313,13 +363,19 @@ def download(url, dest, log=None, label="", size=0):
         open(dest + ".ok", "w").close()
         return dest
     for attempt in (1, 2):
-        cmd = ["curl", "-sSL", "--fail", "--retry", "8", "--retry-delay", "10", "-C", "-", "-o", dest, url]
+        # -q: ignore ~/.curlrc; only http(s), also after redirects
+        cmd = ["curl", "-q", "-sSL", "--fail", "--proto", "=http,https", "--proto-redir", "=http,https",
+               "--retry", "8", "--retry-delay", "10", "-C", "-", "-o", dest, url]
         if PROXY:  # same proxy as everything else; socks5h: the proxy looks up names
-            cmd[1:1] = ["--proxy", _proxy_url()]
+            cmd[2:2] = ["--proxy", _proxy_url()]
         p = subprocess.Popen(cmd)
         last = 0
-        while p.poll() is None:
-            time.sleep(2)
+        while True:
+            try:
+                p.wait(timeout=2)   # returns as soon as curl is done (small files take a fraction of a second)
+                break
+            except subprocess.TimeoutExpired:
+                pass
             if log and size and time.time() - last > 5:
                 have = os.path.getsize(dest) if os.path.exists(dest) else 0
                 log.stage(f"Downloading {label}", have // 1_000_000, size // 1_000_000)
@@ -333,6 +389,24 @@ def download(url, dest, log=None, label="", size=0):
 
 
 # ---------------------------------------------------------------- text
+
+def decode_text(raw):
+    """Bytes of a text file -> str: byte-order marks first (UTF-8, UTF-16, UTF-32), then UTF-16 without one (every
+    other byte zero: what Windows PowerShell and older Notepad often write), then UTF-8, then Windows' Western."""
+    for bom, enc in ((b"\xef\xbb\xbf", "utf-8-sig"), (b"\xff\xfe\x00\x00", "utf-32"), (b"\x00\x00\xfe\xff", "utf-32"),
+                     (b"\xff\xfe", "utf-16"), (b"\xfe\xff", "utf-16")):
+        if raw.startswith(bom):
+            return raw.decode(enc, "replace")
+    head = raw[:4000]
+    if len(head) >= 4 and head[1::2].count(0) > 0.4 * len(head[1::2]) and head[0::2].count(0) < 0.1 * len(head[0::2]):
+        return raw.decode("utf-16-le", "replace")
+    if len(head) >= 4 and head[0::2].count(0) > 0.4 * len(head[0::2]) and head[1::2].count(0) < 0.1 * len(head[1::2]):
+        return raw.decode("utf-16-be", "replace")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("cp1252", "replace")
+
 
 def ocr_html(t):
     """Plain OCR/PDF text -> simple paragraphs."""
@@ -409,11 +483,24 @@ IS_WSL = (os.environ.get("ZIMAKER_NATIVE") != "1"
           and (os.path.exists("/proc/sys/fs/binfmt_misc/WSLInterop") or "microsoft" in os.uname().release.lower()))
 
 
+@functools.lru_cache(maxsize=1)
+def _mount_root():
+    """Where WSL mounts Windows drives ('/mnt/' normally; wsl.conf can change it). Asked once."""
+    try:
+        c = subprocess.check_output(["wslpath", "-u", "C:\\"], text=True).strip()   # e.g. /mnt/c
+        return c[:-1] if c.lower().endswith("c") else "/mnt/"
+    except Exception:  # noqa: BLE001
+        return "/mnt/"
+
+
 def to_wsl(p):
     """A path typed by the user -> a path this process can open."""
     p = p.strip().strip('"')
     if not p or p.startswith("/") or not IS_WSL:
         return os.path.expanduser(p)
+    m = re.match(r"([A-Za-z]):[\\/]?(.*)$", p)
+    if m:  # C:\Users\... : worked out here (wslpath is a program start each time, and this is called often)
+        return _mount_root() + m.group(1).lower() + "/" + m.group(2).replace("\\", "/")
     return subprocess.check_output(["wslpath", "-u", p], text=True).strip()
 
 
@@ -429,9 +516,9 @@ def to_win(p):
 
 def default_output():
     if IS_WSL:
-        prof = windows_profile()
-        if prof:
-            return prof + "\\Documents\\ZIMaker"
+        docs = windows_folders()[1] or (windows_profile() + "\\Documents" if windows_profile() else "")
+        if docs:
+            return docs + "\\ZIMaker"
     docs = os.path.expanduser("~/Documents")
     return os.path.join(docs if os.path.isdir(docs) else os.path.expanduser("~"), "ZIMaker")
 
@@ -447,16 +534,38 @@ def open_folder(p):
 
 
 @functools.lru_cache(maxsize=1)
+def windows_folders():
+    """(user folder, Documents folder) of the Windows user, asked once through PowerShell in UTF-8: cmd.exe answers in
+    an old code page, which garbles names like Jörg, and Documents may have been moved (OneDrive)."""
+    if not IS_WSL:
+        return "", ""
+    try:
+        out = subprocess.check_output(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+             "[Console]::OutputEncoding = [Text.Encoding]::UTF8; [Environment]::GetFolderPath('UserProfile'); "
+             "[Environment]::GetFolderPath('MyDocuments')"],
+            cwd="/mnt/c", stderr=subprocess.DEVNULL, timeout=30).decode("utf-8", "replace").splitlines()
+        lines = [ln.strip() for ln in out if ln.strip()]
+        if len(lines) >= 2 and re.match(r"[A-Za-z]:\\", lines[0]):
+            return lines[0], lines[1] if re.match(r"[A-Za-z]:\\", lines[1]) else ""
+    except Exception:  # noqa: BLE001
+        pass
+    return "", ""
+
+
+@functools.lru_cache(maxsize=1)
 def windows_profile():
     """C:\\Users\\<name> of the Windows user, via WSL interop (asked once; it's slow-ish)."""
     if not IS_WSL:
         return ""
-    try:
+    if windows_folders()[0]:
+        return windows_folders()[0]
+    try:  # older fallback
         out = subprocess.check_output(["cmd.exe", "/c", "echo %USERPROFILE%"], cwd="/mnt/c",
-                                      text=True, stderr=subprocess.DEVNULL).strip()
-        if out and "%" not in out:
+                                      stderr=subprocess.DEVNULL).decode("utf-8", "replace").strip()
+        if out and "%" not in out and "\ufffd" not in out:
             return out
-    except Exception:
+    except Exception:  # noqa: BLE001
         pass
     return ""
 

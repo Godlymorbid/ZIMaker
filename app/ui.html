@@ -327,7 +327,8 @@ let files = [];
 const store = {get(k){try{return localStorage.getItem(k)}catch(e){return null}}, set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
 
 async function api(path, opts={}) {
-  const r = await fetch(path, opts);
+  // X-ZIMaker: the server only accepts changes from its own window (other sites' pages can't send this header)
+  const r = await fetch(path, {...opts, headers: {...(opts.headers || {}), "X-ZIMaker": "1"}});
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;

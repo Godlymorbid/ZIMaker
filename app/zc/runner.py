@@ -120,7 +120,10 @@ def main(job_dir):
                 elif kind == "web":
                     volumes.append((vdir, web.prepare(log, a["url"], job.get("web") or {}, mode, vdir)))
                 elif kind == "lib":
-                    volumes.extend(library.prepare(log, a["url"], mode, vdir, quality))
+                    try:
+                        volumes.extend(library.prepare(log, a["url"], mode, vdir, quality))
+                    except library.NotLibrary:  # e.g. a web app's own /manifest.json: an ordinary website after all
+                        volumes.append((vdir, web.prepare(log, a["url"], job.get("web") or {}, mode, vdir)))
                 elif kind == "gallery":
                     t = os.path.splitext(os.path.basename(a[0][1]))[0] if len(a) == 1 else f"Pictures ({len(a)})"
                     volumes.append((vdir, formats.prepare_gallery(log, a, t, vdir)))
@@ -158,20 +161,29 @@ def main(job_dir):
             name = title or group[0][1]["title"] + (f" (+{len(group) - 1} more)" if len(group) > 1 else "")
             tmp = os.path.join(job_dir, f"out{g}.zim")
             log.stage(f"Building ZIM {g}/{len(groups)}: {name}")
-            status = builder.build(log, group, tmp, title or None)
-            if job.get("neutral_names"):  # the file name doesn't say what's inside (its own title and pages still do)
-                n = 1
-                while os.path.exists(os.path.join(out_dir, time.strftime(f"zim-%Y%m%d-{n}.zim"))):
-                    n += 1
-                dest = os.path.join(out_dir, time.strftime(f"zim-%Y%m%d-{n}.zim"))
-            else:
-                dest = unique(os.path.join(out_dir, C.safe_filename(name + suffix) + ".zim"))
-            log.stage(f"Saving {os.path.basename(dest)}")
-            shutil.move(tmp, dest)
+            try:  # one ZIM failing doesn't stop the others
+                status = builder.build(log, group, tmp, title or None)
+                if job.get("neutral_names"):  # the file name doesn't say what's inside (its own title and pages do)
+                    n = 1
+                    while os.path.exists(os.path.join(out_dir, time.strftime(f"zim-%Y%m%d-{n}.zim"))):
+                        n += 1
+                    dest = os.path.join(out_dir, time.strftime(f"zim-%Y%m%d-{n}.zim"))
+                else:
+                    dest = unique(os.path.join(out_dir, C.safe_filename(name + suffix) + ".zim"))
+                log.stage(f"Saving {os.path.basename(dest)}")
+                shutil.move(tmp, dest)
+            except Exception as e:  # noqa: BLE001
+                result["errors"].append(f"{name}: {e}")
+                log(f"ERROR building {name}: {e}")
+                log(traceback.format_exc())
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+                continue
             size = os.path.getsize(dest)
             result["files"].append({"path": C.to_win(dest), "size": size, "check": status})
             log(f"saved {C.to_win(dest)} ({size / 1e6:.1f} MB)")
-        shutil.rmtree(work, ignore_errors=True)
+        if not result["files"]:
+            raise RuntimeError("No ZIM could be built.")
         log.stage("Done" + (" (with some errors)" if result["errors"] else ""), status="done")
     except Exception as e:  # noqa: BLE001
         result["errors"].append(str(e))
@@ -179,14 +191,21 @@ def main(job_dir):
         log(traceback.format_exc())
         log.stage(f"Failed: {e}", status="failed")
     finally:
+        shutil.rmtree(os.path.join(job_dir, "work"), ignore_errors=True)   # unpacked/converted files: can be GBs
+        result["warnings"] = log.warnings
         with open(os.path.join(job_dir, "result.json"), "w", encoding="utf-8") as f:
             json.dump(result, f)
+        # the original is deleted (watched folder, if set) only when ALL of it made it into a ZIM that passed its check
+        complete = (result["files"] and not result["errors"] and not log.warnings
+                    and all(f["check"] == "pass" for f in result["files"]))
+        uploads = os.path.realpath(C.UPLOADS)
         for s in job.get("sources", []):  # uploaded copies are no longer needed
             p = s.get("path", "")
-            if p.startswith(C.UPLOADS + os.sep):
-                shutil.rmtree(os.path.dirname(p), ignore_errors=True)
-            # from the watched folder with "delete each file after its ZIM is made": only once the ZIM is saved
-            elif job.get("delete_sources") and s.get("type") == "file" and result["files"] and not result["errors"]:
+            folder = os.path.dirname(os.path.realpath(p)) if p else ""
+            if p and os.path.dirname(folder) == uploads:  # only ever one upload's own folder inside uploads
+                shutil.rmtree(folder, ignore_errors=True)
+            # from the watched folder with "delete each file after its ZIM is made"
+            elif job.get("delete_sources") and s.get("type") == "file" and complete and os.path.isfile(p):
                 try:
                     os.remove(p)
                     log(f"deleted {os.path.basename(p)} from the watched folder, as set in Settings")

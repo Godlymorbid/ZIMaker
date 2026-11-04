@@ -22,24 +22,43 @@ PINS = {"libzim": "4.0.0"}
 PANDOC = os.path.join(C.HOME, "pandoc")  # Pandoc converts DOCX, ODT, RTF, Markdown, PPTX, XLSX, ... to EPUB
 
 
+# the PyPI project for a module a library reports missing, where the names differ
+PROJECT_FOR = {"PIL": "pillow", "imghdr": "standard-imghdr", "yaml": "PyYAML", "fitz": "pymupdf"}
+
+
+def _fits(filename, arch, ver):
+    """Does this wheel file work here? Its tags are read exactly: name-version(-build)-python-abi-platform.whl"""
+    parts = filename[:-4].split("-")
+    if len(parts) < 5:
+        return False
+    py, abi, plat = parts[-3].split("."), parts[-2].split("."), parts[-1].split(".")
+    if "any" in plat and "none" in abi:
+        return any(p in ("py3", f"py3{ver[1]}") for p in py)   # pure Python
+    if not any(arch in p and "manylinux" in p for p in plat) or "musllinux" in parts[-1]:
+        return False
+    cp = f"cp{ver[0]}{ver[1]}"
+    if cp in py and cp in abi:   # exactly this Python ("cp314t" free-threaded builds don't match)
+        return True
+    return "abi3" in abi and any(re.fullmatch(r"cp3(\d+)", p) and int(p[3:]) <= ver[1] for p in py)
+
+
 def _wheel_url(project):
     ver = sys.version_info[:2]
-    tag = f"cp{ver[0]}{ver[1]}"
     arch = platform.machine()  # x86_64 on Intel/AMD PCs, aarch64 on ARM (Snapdragon) PCs
     pin = PINS.get(project)
     d = C.get_json(f"https://pypi.org/pypi/{project}/{pin}/json" if pin else f"https://pypi.org/pypi/{project}/json")
-    for f in d["urls"]:
-        n = f["filename"]
-        if not n.endswith(".whl"):
-            continue
-        if n.endswith("-none-any.whl") and "py3" in n:  # pure-Python wheel: works everywhere
-            return f["url"], n
-        if arch not in n or "manylinux" not in n:
-            continue
-        m = re.search(r"-cp3(\d+)-abi3-", n)
-        if f"{tag}-{tag}" in n or (m and int(m.group(1)) <= ver[1]):
-            return f["url"], n
-    raise RuntimeError(f"No Linux {arch} wheel of {project} for Python {ver[0]}.{ver[1]}")
+    candidates = [d["urls"]]
+    if not pin:  # the newest release first, then older ones: the newest may no longer support this Python
+        def key(v):
+            return [int(x) for x in re.findall(r"\d+", v)[:4]]
+        candidates += [d["releases"][v] for v in sorted(d.get("releases", {}), key=key, reverse=True)
+                       if not re.search(r"[a-z]", v.lower().replace("post", ""))][:40]   # no alphas/betas/rcs
+    for files in candidates:
+        for f in files:
+            if f["filename"].endswith(".whl") and not f.get("yanked") and _fits(f["filename"], arch, ver):
+                return f["url"], f["filename"]
+    raise RuntimeError(f"No Linux {arch} wheel of {project} for Python {ver[0]}.{ver[1]}"
+                       + (f" (ZIMaker needs version {pin})" if pin else ""))
 
 
 def _install(project, log):
@@ -140,9 +159,13 @@ def ensure(log=print):
         for _ in range(4):  # the package itself, then any dependency it reports missing
             if ok:
                 break
-            _install(target, log)
+            try:
+                _install(target, log)
+            except Exception as e:  # noqa: BLE001  e.g. a dependency whose PyPI name we guessed wrong
+                raise RuntimeError(f"Could not set up {project} (installing {target} failed: {e})") from e
             ok, missing = _importable(module)
             dep = (missing or "").split(".")[0]
+            dep = PROJECT_FOR.get(dep, dep)
             target = dep if dep and dep != module and re.fullmatch(r"[A-Za-z0-9_-]+", dep) else project
         if not ok:
             raise RuntimeError(f"Could not set up {project}: {missing}")
