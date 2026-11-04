@@ -159,6 +159,39 @@ def proxy_test(p):
         return out
 
 
+def node_test(kind, p):
+    """Is the I2P router or Hyphanet node (from the Settings window, not saved yet) answering? I2P: also fetch a
+    well-known I2P site through it, to show the router has joined the network."""
+    p = C.clean_i2p(p) if kind == "i2p" else C.clean_hyphanet(p)
+    gw = {"host": p["host"], "port": p["port"]}
+    t = time.time()
+    try:
+        if kind == "i2p":
+            opener = C.proxy_opener(C.clean_proxy({}), i2p=gw)
+            url = "http://i2p-projekt.i2p/"
+        else:   # the gateway's own start page, directly: answers when the node is running (no network fetch)
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            url = f"http://{'[::1]' if gw['host'] in ('::1', '[::1]') else gw['host']}:{gw['port']}/"
+        req = urllib.request.Request(url, headers=C.UA)
+        with opener.open(req, timeout=90 if kind == "i2p" else 15) as r:
+            r.read(2000)
+        return {"ok": True, "seconds": round(time.time() - t, 1)}
+    except Exception as e:  # noqa: BLE001
+        why = str(getattr(e, "reason", "") or e)
+        out = {"ok": False, "error": why}
+        if "refused" in why.lower():
+            out["error"] = (f"nothing answers at {p['host']}:{p['port']}. Is "
+                            + ("your I2P router" if kind == "i2p" else "Hyphanet") + " running, on that port?")
+        if isinstance(e, urllib.error.HTTPError) and kind == "i2p":
+            # the router answered (its own error page: site not found yet, router still starting)
+            out = {"ok": False, "error": f"the router answered, but couldn't reach the test site yet (HTTP {e.code}). "
+                                         "A new router needs a few minutes to join the network.", "router": True}
+        if C.IS_WSL and p["host"].strip("[]") in ("127.0.0.1", "localhost", "::1") and \
+                ("refused" in why.lower() or "timed out" in why.lower()):
+            out["wsl_hint"] = True
+        return out
+
+
 def forget(path):
     json.dump([x for x in _library_load() if x.get("path") != path], open(LIBRARY, "w", encoding="utf-8"))
 
@@ -226,6 +259,9 @@ def classify(line):
     """('ia', item id) | ('lib', url) | ('web', url) | (None, error message) for one line of the links box."""
     from zc import ia, library
     s = line.strip()
+    key = C.hyphanet_key(s)   # USK@…, freenet:…, or a link to the node's gateway: a Hyphanet freesite
+    if key:
+        return "web", C.hyphanet_url(key)
     if re.match(r"https?://", s, re.I):
         host = urllib.parse.urlsplit(s).netloc.lower()
         if host.endswith("archive.org") and ia.item_id(s):
@@ -234,8 +270,9 @@ def classify(line):
             return "lib", s
         return "web", s
     # bare text: a domain like example.com/page is a website; anything else an archive.org item ID
-    if re.fullmatch(r"[\w-]+(\.[\w-]+)*\.[A-Za-z]{2,24}(/\S*)?", s) and not s.lower().startswith("archive.org"):
-        url = ("http://" if C.is_onion("http://" + s) else "https://") + s   # onion sites rarely use https
+    if re.fullmatch(r"[\w-]+(\.[\w-]+)*\.([A-Za-z]{2,24}|i2p)(/\S*)?", s, re.I) and not s.lower().startswith("archive.org"):
+        # onion and I2P sites rarely use https
+        url = ("http://" if C.is_onion("http://" + s) or C.is_i2p("http://" + s) else "https://") + s
         return ("lib" if library.detect(url) else "web"), url
     if s.lower().startswith("archive.org/") and ia.item_id("https://" + s):
         return "ia", ia.item_id("https://" + s)
@@ -722,6 +759,8 @@ class H(BaseHTTPRequestHandler):
                 return self._json({"error": str(e)}, 400)
         if u.path == "/api/proxy/test":
             return self._json(proxy_test(self._body().get("proxy")))
+        if u.path in ("/api/i2p/test", "/api/hyphanet/test"):
+            return self._json(node_test(u.path.split("/")[2], self._body().get("node")))
         if u.path == "/api/history/clear":
             return self._json({"ok": True, "removed": clear_history()})
         if u.path == "/api/zim/forget":

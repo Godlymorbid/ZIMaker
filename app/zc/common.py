@@ -206,9 +206,157 @@ ONION_NEEDS_TOR = ("This is a Tor onion site, which can only be reached through 
                    "privacy, choose Tor Browser or Tor service (Tor must be running), then try again.")
 
 
+def _host_of(url_or_host):
+    """The host name of a URL or of a "host" / "host:port" string (urllib's req.host has the port)."""
+    try:
+        return urllib.parse.urlsplit(url_or_host if "//" in url_or_host else "//" + url_or_host).hostname or ""
+    except ValueError:
+        return ""
+
+
 def is_onion(url_or_host):
-    host = urllib.parse.urlsplit(url_or_host).hostname if "//" in url_or_host else url_or_host
-    return bool(host) and host.lower().rstrip(".").endswith(".onion")
+    return _host_of(url_or_host).rstrip(".").endswith(".onion")
+
+
+# I2P sites (.i2p): only through the user's I2P router (Java I2P or i2pd), whose HTTP proxy looks the name up
+# inside I2P. Only .i2p addresses go there; everything else keeps using the proxy above (or none).
+I2P = {}  # the router in use: {"host", "port"}; empty = I2P off
+I2P_NEEDS_ROUTER = ("This is an I2P site, which can only be reached through an I2P router. Install and start I2P or "
+                    "i2pd, turn on ⚙ Settings → Connection and privacy → I2P sites, then try again.")
+
+
+def clean_i2p(p):
+    p = p if isinstance(p, dict) else {}
+    try:
+        port = int(p.get("port") or 4444)
+    except (TypeError, ValueError):
+        port = 4444
+    return {"on": bool(p.get("on")), "host": str(p.get("host") or "127.0.0.1").strip()[:255],
+            "port": port if 0 < port < 65536 else 4444}
+
+
+def is_i2p(url_or_host):
+    return _host_of(url_or_host).rstrip(".").endswith(".i2p")
+
+
+def i2p_ok():
+    return bool(I2P) and not _proxy_problem(I2P)
+
+
+# Hyphanet (formerly Freenet): its content is read through the user's own node, whose web gateway (FProxy, normally
+# http://127.0.0.1:8888) fetches a key like USK@…/site/5/ from the network. The gateway runs on this computer, so it
+# is reached directly, never through the proxy above (which couldn't reach a local address anyway).
+HYPHANET = {}  # the node's gateway: {"host", "port"}; empty = off
+HYPHANET_NEEDS_NODE = ("This is a Hyphanet (Freenet) key, which can only be read through a Hyphanet node. Install and "
+                       "start Hyphanet, turn on ⚙ Settings → Connection and privacy → Hyphanet, then try again.")
+LOOPBACK = ("127.0.0.1", "localhost", "::1", "[::1]")
+KEY_RE = re.compile(r"(USK|SSK|CHK|KSK)@\S+")
+
+
+def clean_hyphanet(p):
+    p = p if isinstance(p, dict) else {}
+    try:
+        port = int(p.get("port") or 8888)
+    except (TypeError, ValueError):
+        port = 8888
+    host = str(p.get("host") or "127.0.0.1").strip().lower()
+    return {"on": bool(p.get("on")), "host": host if host in LOOPBACK else "127.0.0.1",   # only this computer's node
+            "port": port if 0 < port < 65536 else 8888}
+
+
+def hyphanet_key(s):
+    """'USK@…/site/5/', 'freenet:USK@…', 'hyphanet:…' or a gateway link (http://127.0.0.1:8888/USK@…) -> the key
+    ('USK@…/site/5/'), else None."""
+    s = s.strip()
+    s = re.sub(r"^(?:freenet|hyphanet|hyph):/*", "", s, flags=re.I)
+    m = re.match(r"https?://([^/]+)/+(.*)$", s, re.I)
+    if m:
+        if (_host_of(m.group(1)) or "").lower() not in ("127.0.0.1", "localhost", "::1"):
+            return None
+        s = re.sub(r"^(?:freenet|hyphanet|hyph):/*", "", urllib.parse.unquote(m.group(2)), flags=re.I)
+    s = s.lstrip("/")
+    return s if KEY_RE.fullmatch(s) else None
+
+
+def hyphanet_url(key):
+    g = HYPHANET or {"host": "127.0.0.1", "port": 8888}
+    host = "[::1]" if g["host"] in ("::1", "[::1]") else g["host"]
+    return f"http://{host}:{g['port']}/" + urllib.parse.quote(key, safe="/@~,-._!$()*+;=")
+
+
+def is_hyphanet(url):
+    """A gateway link: this computer's address with a Hyphanet key as its path."""
+    try:
+        p = urllib.parse.urlsplit(url)
+    except ValueError:
+        return False
+    return (p.hostname or "") in ("127.0.0.1", "localhost", "::1") and \
+        bool(KEY_RE.match(urllib.parse.unquote(p.path).lstrip("/")))
+
+
+def hyphanet_ok():
+    return bool(HYPHANET)
+
+
+def hyphanet_root(url):
+    """The freesite a gateway link belongs to: /USK@key/name/ (every edition), /SSK@key/name-5/, /CHK@key/."""
+    segs = urllib.parse.unquote(urllib.parse.urlsplit(url).path).lstrip("/").split("/")
+    n = 1 if segs[0].startswith(("CHK@", "KSK@")) else 2
+    return "/" + "/".join(segs[:n]) + "/"
+
+
+class _Hyphanet(urllib.request.BaseHandler):
+    """Runs before the proxy handlers: Hyphanet keys go straight to the local node's gateway, and only when
+    Hyphanet is turned on. The gateway shows a "confirm" page instead of files over its size limit, so the
+    request (not the address saved) asks for a larger limit."""
+    handler_order = 84
+
+    def __init__(self, gateway=None):
+        self.gateway = gateway
+
+    def http_open(self, req):
+        if not is_hyphanet(req.full_url):
+            return None
+        g = self.gateway
+        if not g:
+            raise urllib.error.URLError(HYPHANET_NEEDS_NODE)
+        if (urllib.parse.urlsplit(req.full_url).port or 80) != g["port"]:
+            raise urllib.error.URLError(f"this Hyphanet link is for a gateway at {req.host}, but Hyphanet in ⚙ Settings "
+                                        f"is set to port {g['port']}")
+        req.selector += ("&" if "?" in req.selector else "?") + "max-size=500000000"
+        return urllib.request.HTTPHandler().http_open(req)
+
+    def https_open(self, req):
+        if is_hyphanet(req.full_url):
+            raise urllib.error.URLError("Hyphanet's gateway uses http://, not https://")
+        return None
+
+
+def is_darknet(url):
+    """Onion, I2P or Hyphanet: slow networks, so longer timeouts, fewer requests at once and retries."""
+    return is_onion(url) or is_i2p(url) or is_hyphanet(url)
+
+
+class _I2P(urllib.request.BaseHandler):
+    """Runs before the proxy handlers: .i2p addresses go to the I2P router's HTTP proxy and nowhere else
+    (refused, before any DNS lookup, when I2P is off)."""
+    handler_order = 85
+
+    def __init__(self, router=None):
+        self.router = router
+
+    def _open(self, req):
+        if not is_i2p(req.host or ""):
+            return None
+        r = self.router
+        if not r or _proxy_problem(r):
+            raise urllib.error.URLError(I2P_NEEDS_ROUTER)
+        req.set_proxy(f"{r['host']}:{r['port']}", "http")   # http: absolute URL to the router; https: CONNECT
+        if req.type == "https":
+            return urllib.request.HTTPSHandler(context=ssl.create_default_context()).https_open(req)
+        return urllib.request.HTTPHandler().http_open(req)
+
+    http_open = https_open = _open
 
 
 def onion_ok():
@@ -240,36 +388,48 @@ class _WebOnly(urllib.request.BaseHandler):
     file_open = ftp_open = data_open = _refuse
 
 
-def proxy_opener(p):
-    """A urllib opener that sends everything through proxy p (and nothing around it)."""
+def proxy_opener(p, i2p=None, hyphanet=None):
+    """A urllib opener that sends everything through proxy p (and nothing around it); .i2p addresses through
+    the I2P router i2p, Hyphanet keys to the local gateway hyphanet ({"host", "port"}, or None: refused)."""
+    i2 = [_I2P(i2p), _Hyphanet(hyphanet)]
     if p["type"] == "off":
-        return urllib.request.build_opener(_WebOnly(), _NoOnion())
+        return urllib.request.build_opener(_WebOnly(), *i2, _NoOnion())
     why = _proxy_problem(p)
     if why:
-        return urllib.request.build_opener(_WebOnly(), _Refuse(why))
+        return urllib.request.build_opener(_WebOnly(), *i2, _Refuse(why))
     if p["type"] == "http":
         login = (urllib.parse.quote(p["user"], safe="") + ":" + urllib.parse.quote(p["password"], safe="") + "@"
                  if p["user"] else "")
         url = f"http://{login}{p['host']}:{p['port']}"
         return urllib.request.build_opener(urllib.request.ProxyHandler({"http": url, "https": url}), _WebOnly(),
-                                           _Refuse(), _NoOnion())
+                                           *i2, _Refuse(), _NoOnion())
     return urllib.request.build_opener(urllib.request.ProxyHandler({}), _SocksHandler(p), _SocksHTTPSHandler(p),
-                                       _WebOnly(), _Refuse())
+                                       _WebOnly(), *i2, _Refuse())
 
 
-def net_init(p=None):
-    """Use the proxy from settings.json (or p) for every download this process makes."""
-    if p is None:
+def net_init(p=None, i2p=None, hyphanet=None):
+    """Use the proxy, I2P router and Hyphanet gateway from settings.json (or the arguments) for every download
+    this process makes."""
+    if p is None or i2p is None or hyphanet is None:
         try:
-            p = json.load(open(os.path.join(HOME, "settings.json"), encoding="utf-8")).get("proxy")
+            s = json.load(open(os.path.join(HOME, "settings.json"), encoding="utf-8"))
+            p = s.get("proxy") if p is None else p
+            i2p = s.get("i2p") if i2p is None else i2p
+            hyphanet = s.get("hyphanet") if hyphanet is None else hyphanet
         except (OSError, ValueError, AttributeError):
-            p = None
-    p = clean_proxy(p)
+            pass
+    p, i2p, hyphanet = clean_proxy(p), clean_i2p(i2p), clean_hyphanet(hyphanet)
     PROXY.clear()
     if p["type"] != "off":
         PROXY.update(p)
         os.environ.pop("no_proxy", None), os.environ.pop("NO_PROXY", None)  # urllib would go around the proxy for these
-    urllib.request.install_opener(proxy_opener(p))
+    I2P.clear()
+    if i2p["on"]:
+        I2P.update(host=i2p["host"], port=i2p["port"])
+    HYPHANET.clear()
+    if hyphanet["on"]:
+        HYPHANET.update(host=hyphanet["host"], port=hyphanet["port"])
+    urllib.request.install_opener(proxy_opener(p, dict(I2P) or None, dict(HYPHANET) or None))
 
 
 def _proxy_url():
@@ -339,7 +499,8 @@ def _download_py(url, dest, log, label, size):
                 raise   # not found, forbidden...: trying again won't change it
         except urllib.error.URLError as e:
             if attempt == 7 or isinstance(e.reason, ssl.SSLCertVerificationError) or "can't be used" in str(e.reason) \
-                    or "only downloads web" in str(e.reason) or "onion site" in str(e.reason):
+                    or "only downloads web" in str(e.reason) or "onion site" in str(e.reason) \
+                    or "I2P site, which" in str(e.reason) or "Hyphanet" in str(e.reason):
                 raise   # a bad certificate or a refused address won't fix itself
         except (TimeoutError, OSError):
             if attempt == 7:
@@ -358,7 +519,12 @@ def download(url, dest, log=None, label="", size=0):
         raise RuntimeError(f"The proxy can't be used: {_proxy_problem(PROXY)}. Check ⚙ Settings → Connection and privacy.")
     if is_onion(url) and not onion_ok():
         raise RuntimeError(ONION_NEEDS_TOR)
-    if not shutil.which("curl") or is_onion(url):  # onion: Python's SOCKS code (it never resolves names locally)
+    if is_i2p(url) and not i2p_ok():
+        raise RuntimeError(I2P_NEEDS_ROUTER)
+    if is_hyphanet(url) and not hyphanet_ok():
+        raise RuntimeError(HYPHANET_NEEDS_NODE)
+    # onion and I2P: Python's code (it never resolves names locally, and sends .i2p only to the router)
+    if not shutil.which("curl") or is_darknet(url):
         _download_py(url, dest, log, label, size)
         open(dest + ".ok", "w").close()
         return dest

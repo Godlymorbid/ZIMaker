@@ -66,6 +66,8 @@ def explain(e):
         return f"The site returned an error (HTTP {e.code} {e.reason})."
     if isinstance(e, (urllib.error.URLError, TimeoutError, OSError)):
         why = str(getattr(e, "reason", "") or e)
+        if "onion site, which" in why or "I2P site, which" in why or "Hyphanet" in why:
+            return why[0].upper() + why[1:] + ("" if why.endswith(".") else ".")
         if C.PROXY:
             if "proxy" in why.lower():  # our own messages: the proxy isn't usable, or it couldn't reach the site
                 return why[0].upper() + why[1:] + "."
@@ -224,9 +226,19 @@ class Site:
         self.onion = C.is_onion(self.start)
         if self.onion and not offline and not C.onion_ok():
             raise RuntimeError(C.ONION_NEEDS_TOR)
+        # I2P sites through the I2P router, Hyphanet keys through the local node: just as slow
+        self.i2p, self.hyphanet = C.is_i2p(self.start), C.is_hyphanet(self.start)
+        if self.i2p and not offline and not C.i2p_ok():
+            raise RuntimeError(C.I2P_NEEDS_ROUTER)
+        if self.hyphanet and not offline and not C.hyphanet_ok():
+            raise RuntimeError(C.HYPHANET_NEEDS_NODE)
+        self.dark = self.onion or self.i2p or self.hyphanet
         self.hosts = {host, host[4:] if host.startswith("www.") else "www." + host}
         # compared with decoded paths in in_scope, so decoded here too (/wiki/Caf%C3%A9/ -> /wiki/Café/)
         self.prefix = urllib.parse.unquote(s.path[: s.path.rfind("/") + 1]) if scope == "section" else "/"
+        if self.hyphanet:   # the gateway serves every freesite (and its own pages): stay inside this one
+            root = C.hyphanet_root(self.start)
+            self.prefix = self.prefix if self.prefix.startswith(root) else root
         self.max_pages = max_pages
         self.store = os.path.join(vdir, "site")
         os.makedirs(self.store, exist_ok=True)
@@ -240,7 +252,8 @@ class Site:
         self.single = scope == "page"  # just the linked page (plus its pictures and styles)
         self.robots = urllib.robotparser.RobotFileParser()   # only for its Crawl-delay
         try:
-            if offline or not robots:  # a saved page: no network at all; Check links: one request only
+            # a saved page: no network at all; Check links: one request only; Hyphanet: robots.txt would be the gateway's
+            if offline or not robots or self.hyphanet:
                 raise RuntimeError
             txt = self._get(f"{s.scheme}://{host}/robots.txt", small=True)[3].decode("utf-8", "replace")
             self.robots.parse(txt.splitlines())
@@ -251,7 +264,8 @@ class Site:
     # ---------------------------------------------------------------- fetching
     def _get(self, url, small=False):
         req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
-        timeout = (60 if small else 120) if self.onion else (20 if small else 45)
+        # Hyphanet: the gateway answers once it has fetched the whole file from the network, which can take minutes
+        timeout = (300 if self.hyphanet else (60 if small else 120)) if self.dark else (20 if small else 45)
         with urllib.request.urlopen(req, timeout=timeout) as r:
             ctype = r.headers.get_content_type()
             av = self.include_av and ctype.split("/")[0] in ("video", "audio")
@@ -302,8 +316,9 @@ class Site:
                 time.sleep(min(max(wait, 5 * (attempt + 1)), 60))
             except Exception as e:  # noqa: BLE001
                 # through Tor a circuit can fail ("host unreachable", time-outs): wait and try a new one
-                if not (self.onion and isinstance(e, (urllib.error.URLError, TimeoutError, OSError))) or attempt == 3 \
-                        or "onion site, which can only" in str(e):
+                if not (self.dark and isinstance(e, (urllib.error.URLError, TimeoutError, OSError))) or attempt == 3 \
+                        or "onion site, which can only" in str(e) or "I2P site, which" in str(e) \
+                        or "Hyphanet" in str(e):
                     return url, e
                 time.sleep(5 * (attempt + 1))
         return url, RuntimeError("gave up")
@@ -477,7 +492,7 @@ class Site:
         log = self.log
         pages, queued, assets = deque([self.start]), {self.start}, set()
         n_pages = 0
-        with ThreadPoolExecutor(1 if self.delay else 2 if self.onion else 4) as pool:
+        with ThreadPoolExecutor(1 if self.delay else 2 if self.dark else 4) as pool:
             while pages and n_pages < self.max_pages:
                 batch = [pages.popleft() for _ in range(min(8, len(pages)))]
                 for url, res in pool.map(self.fetch, batch):
@@ -587,7 +602,7 @@ def peek(url):
 
 def prepare(log, url, opts, mode, vdir):
     # a IIIF manifest whose address doesn't say "manifest" (e.g. Wellcome's): treat it as the book it describes
-    if re.search(r"iiif|presentation", url, re.I) and not C.is_onion(url):
+    if re.search(r"iiif|presentation", url, re.I) and not C.is_darknet(url):
         m = C.get_json_small(url)   # only a JSON answer, and only a few MB of it: else an ordinary website
         if isinstance(m, dict) and "iiif.io" in json.dumps(m.get("@context", "")) and ("sequences" in m or "items" in m):
             from . import library
@@ -602,12 +617,25 @@ def prepare(log, url, opts, mode, vdir):
         else "saving pages without their JavaScript, as they look in ZIMaker's preview")
     if site.onion:
         log("onion site: everything goes through Tor, which is slow; expect this to take a while")
+    if site.i2p:
+        log("I2P site: everything goes through your I2P router, which is slow; expect this to take a while")
+    if site.hyphanet:
+        log(f"Hyphanet freesite {site.prefix}: read through your Hyphanet node, which can take minutes per file; "
+            "expect this to take a while")
     log(f"[{site.start}] " + ("saving just this page" if scope == "page" else f"saving up to {max_pages} pages"
                               + (f" under {site.prefix}" if scope == "section" else "")))
     n = site.crawl()
     if not n:
         if site.start_error is not None:
-            raise RuntimeError(explain(site.start_error))
+            e = site.start_error
+            if (site.i2p or site.hyphanet) and not isinstance(e, urllib.error.HTTPError) \
+                    and not re.search(r"I2P site, which|Hyphanet", str(getattr(e, "reason", "") or e)):
+                raise RuntimeError(  # the router or node is on this computer, not behind the proxy
+                    "Couldn't reach this I2P site. Check that your I2P router is running (a new router needs a few "
+                    "minutes to join the network) and that the site is online." if site.i2p else
+                    "Couldn't read this freesite. Check that Hyphanet is running and connected, and that the key is "
+                    "complete (a new node needs a while to find content).")
+            raise RuntimeError(explain(e))
         raise RuntimeError("This address didn't return a web page.")
     site.rewrite()
     log(f"[{site.start}] {n} pages and {len(site.saved) - n} other files ({site.total / 1e6:.0f} MB)"
@@ -618,6 +646,9 @@ def prepare(log, url, opts, mode, vdir):
     files = [{"path": i["z"], "disk": os.path.join("site", i["disk"]), "mime": i["mime"], "title": i["title"]}
              for i in unique.values()]
     host = urllib.parse.urlsplit(site.start).netloc
+    if site.hyphanet:   # not "127.0.0.1:8888": the freesite's name
+        parts = site.prefix.strip("/").split("/")
+        host = parts[1] if len(parts) > 1 else "Hyphanet"
     title = start["title"] if start["title"] and not re.match(r"https?://", start["title"]) else host
     return {"kind": "site", "title": title, "creator": host, "publisher": host,
             "date": time.strftime("%Y-%m-%d"), "language": "eng", "source": site.start,

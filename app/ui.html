@@ -204,12 +204,29 @@ body.dragging #drop{display:flex}
   </div>
   <div class="row"><button id="p-test">Test connection</button><span id="p-testmsg" class="hint" aria-live="polite"></span></div>
   <div id="p-wslhint" class="hint" style="display:none;margin-top:6px">
-    Tor Browser and Psiphon listen on Windows' own address (127.0.0.1), which ZIMaker can't reach in WSL's default
+    Programs on Windows (Tor Browser, Psiphon, I2P, Hyphanet) listen on Windows' own address (127.0.0.1), which ZIMaker can't reach in WSL's default
     network mode. To fix this once (Windows 11 22H2 or newer): in your Windows user folder (C:\Users\<i>you</i>), create a
     text file named <code>.wslconfig</code> containing the two lines <code>[wsl2]</code> and <code>networkingMode=mirrored</code>,
     then run <code>wsl --shutdown</code> in PowerShell (this stops all Linux programs in WSL) and open ZIMaker again.
     Or run the proxy inside WSL instead: Tor's service (<code>sudo apt install tor</code>) listens on 127.0.0.1:9050.
   </div>
+
+  <div style="margin-top:14px"><b>I2P sites</b></div>
+  <label class="opt"><input type="checkbox" id="s-i2p"> Save <code>.i2p</code> sites through my I2P router
+    <small>Needs I2P or i2pd installed and running. Only .i2p addresses go to the router; everything else uses the proxy above, or none. With this off, ZIMaker refuses .i2p addresses, so their names never reach your network.</small></label>
+  <div class="proxy-grid" id="i2pfields">
+    <label>Router address <input type="text" id="s-i2phost" placeholder="127.0.0.1" autocomplete="off"></label>
+    <label>HTTP proxy port <input type="text" id="s-i2pport" placeholder="4444" inputmode="numeric" autocomplete="off"></label>
+  </div>
+  <div class="row" id="i2ptestrow"><button id="i2p-test">Test I2P</button><span id="i2p-testmsg" class="hint" aria-live="polite"></span></div>
+
+  <div style="margin-top:14px"><b>Hyphanet (Freenet)</b></div>
+  <label class="opt"><input type="checkbox" id="s-hyph"> Save Hyphanet freesites through my node
+    <small>Needs Hyphanet installed and running on this computer. Paste a key (USK@…, SSK@…, CHK@…) or a link from your node's gateway. ZIMaker reads it through the node's local gateway, never through the proxy above.</small></label>
+  <div class="proxy-grid" id="hyphfields">
+    <label>Gateway port <input type="text" id="s-hyphport" placeholder="8888" inputmode="numeric" autocomplete="off"></label>
+  </div>
+  <div class="row" id="hyphtestrow"><button id="hyph-test">Test Hyphanet</button><span id="hyph-testmsg" class="hint" aria-live="polite"></span></div>
 
   <div style="margin-top:14px"><b>Privacy</b></div>
   <label class="opt"><input type="checkbox" id="s-private"> Private mode: keep no history
@@ -517,6 +534,37 @@ $("#p-test").onclick = async () => {
     if (r.wsl_hint) $("#p-wslhint").style.display = "block";
   }
 };
+// I2P router and Hyphanet node
+function showNodes(i2p, hy) {
+  $("#s-i2p").checked = i2p.on; $("#s-i2phost").value = i2p.host; $("#s-i2pport").value = i2p.port || "";
+  $("#s-hyph").checked = hy.on; $("#s-hyphport").value = hy.port || "";
+  showNodeFields();
+}
+function showNodeFields() {
+  for (const [box, ids] of [["#s-i2p", ["#i2pfields", "#i2ptestrow"]], ["#s-hyph", ["#hyphfields", "#hyphtestrow"]]])
+    for (const id of ids) $(id).style.display = $(box).checked ? "" : "none";
+}
+function readI2p() {
+  return {on: $("#s-i2p").checked, host: $("#s-i2phost").value.trim() || "127.0.0.1",
+          port: parseInt($("#s-i2pport").value, 10) || 4444};
+}
+function readHyph() {
+  return {on: $("#s-hyph").checked, host: "127.0.0.1", port: parseInt($("#s-hyphport").value, 10) || 8888};
+}
+$("#s-i2p").onchange = $("#s-hyph").onchange = showNodeFields;
+async function testNode(kind, node, msg, button, waiting, good) {
+  $("#p-wslhint").style.display = "none";
+  $(msg).textContent = waiting; $(button).disabled = true;
+  const r = await api(`/api/${kind}/test`, {method: "POST", body: JSON.stringify({node})}).catch(e => ({error: e.message}));
+  $(button).disabled = false;
+  $(msg).innerHTML = r.ok ? `<span class="good">Working.</span> ${good} · ${r.seconds} s`
+                          : `<span class="err">Not working: ${esc(r.error || "unknown error")}</span>`;
+  if (r.wsl_hint) $("#p-wslhint").style.display = "block";
+}
+$("#i2p-test").onclick = () => testNode("i2p", readI2p(), "#i2p-testmsg", "#i2p-test",
+  "Testing (fetching an I2P site, this can take a minute)…", "The router reached an I2P site.");
+$("#hyph-test").onclick = () => testNode("hyphanet", readHyph(), "#hyph-testmsg", "#hyph-test",
+  "Testing…", "Your node's gateway answers.");
 let downloadsDir = "";
 $("#s-watch").onchange = () => { if ($("#s-watch").checked && !$("#s-watchdir").value.trim()) $("#s-watchdir").value = downloadsDir; };
 $("#clearhist").onclick = async () => {
@@ -609,6 +657,8 @@ $("#opensettings").onclick = () => {
   loadTools();
   $("#s-updates").checked = draft.check_updates;
   showProxy(draft.proxy);
+  showNodes(draft.i2p || {on: false, host: "127.0.0.1", port: 4444}, draft.hyphanet || {on: false, port: 8888});
+  $("#i2p-testmsg").textContent = ""; $("#hyph-testmsg").textContent = "";
   $("#s-browser").value = draft.browser || "auto";
   $("#s-stopafter").value = String(draft.stop_after ?? 150);
   $("#s-notify").checked = draft.notify !== false;
@@ -657,6 +707,8 @@ $("#savesettings").onclick = async () => {
   readDraftProfile();
   draft.check_updates = $("#s-updates").checked;
   draft.proxy = readProxy();
+  draft.i2p = readI2p();
+  draft.hyphanet = readHyph();
   draft.browser = $("#s-browser").value;
   draft.stop_after = parseInt($("#s-stopafter").value, 10);
   draft.notify = $("#s-notify").checked;
