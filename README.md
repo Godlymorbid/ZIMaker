@@ -184,6 +184,7 @@ In **Your ZIM files**, tick two or more ZIMs (any you've made or opened, includi
 | Audio ¹ | MP3, M4A, AAC, WAV, FLAC, OGG, OPUS, WMA, AIFF, M4B and more | MP3 (MP3s are kept as they are), with cover art when the file has it |
 | Archives | ZIP, TAR, TAR.GZ, TAR.XZ, TAR.BZ2; 7Z, RAR, CBR, CB7 ¹ | a saved website folder becomes a website; a CHM-style help folder becomes a site; a folder of pictures becomes a gallery; anything else is converted file by file, including archives inside archives |
 | Help files ¹ | CHM | the help pages as a website |
+| ZIM files | ZIM (your own, or downloaded from Kiwix; not ones made by zimit for editing or combining) | in **Your ZIM files**: [preview](#open-and-preview-zim-files), [edit a copy](#edit-a-zim) (details, smaller, cleaner, pages removed), or [combine several into one](#combine-zim-files-into-one) |
 
 ¹ Needs an optional tool (below).
 ² Needs Tor, I2P, Hyphanet or IPFS running and a setting turned on (IPFS can also use a public gateway): see [Onion, I2P, Hyphanet and IPFS](#onion-i2p-hyphanet-and-ipfs).
@@ -195,7 +196,6 @@ In **Your ZIM files**, tick two or more ZIMs (any you've made or opened, includi
 - DjVu: convert to PDF first.
 - Apple iWork files (Pages, Keynote, Numbers): export them first.
 - WARC web archives.
-- ZIM files: these open in the viewer instead, or can be [combined into one](#combine-zim-files-into-one).
 
 The app says why when you add one of these.
 

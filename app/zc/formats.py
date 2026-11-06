@@ -54,7 +54,7 @@ UNSUPPORTED = {
     ".key": "Apple Keynote files aren't supported. Export it as PowerPoint or PDF.",
     ".numbers": "Apple Numbers files aren't supported. Export it as Excel or PDF.",
     ".warc": "Web archive (WARC) files aren't supported. openZIM's warc2zim tool converts them to ZIM.",
-    ".zim": "That's already a ZIM file. Use “Open a ZIM file” to look inside it.",
+    ".zim": "That's already a ZIM file. Open it in “Your ZIM files” to preview it, edit a copy, or combine it with others.",
 }
 DOCS = set(PANDOC_FORMATS) | OFFICE | EBOOK | MOBI | PAGED | TEXT | MHTML | EMAIL
 SUPPORTED = DOCS | IMAGES | ARCHIVES | media.VIDEO_EXT | media.AUDIO_EXT | media.SUBTITLE_EXT
