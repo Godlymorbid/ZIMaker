@@ -359,6 +359,13 @@ body.dragging #drop{display:flex}
       <button id="openzim">Open</button></div>
     <div class="hint" id="zimmsg"></div>
     <ul class="items lib" id="library"><li class="hint">Nothing yet.</li></ul>
+    <div class="hint" id="combinehint" style="display:none">Tick two or more to combine them into one ZIM.</div>
+    <div id="combinebar" style="display:none;margin-top:8px">
+      <div class="row"><input type="text" id="combinetitle" placeholder="Title of the combined ZIM (optional)" style="flex:1;min-width:200px">
+        <button id="combine" class="primary">Combine into one ZIM</button></div>
+      <div class="hint">Each ZIM goes into its own folder behind a new front page, with one search across all of them. The originals aren't changed. Saved to the folder in step 2.</div>
+    </div>
+    <div class="hint" id="combinemsg" aria-live="polite"></div>
   </div>
 </main>
 <script>
@@ -470,14 +477,39 @@ async function uploadAndOpenZim(f) {
 }
 async function loadLibrary() {
   const r = await api("/api/zim/library").catch(() => ({items: []}));
-  $("#library").innerHTML = r.items.length ? r.items.map(z => `<li><span><b>${esc(z.title)}</b> <span class="hint">${(z.size / 1e6).toFixed(1)} MB</span><br>
-      <span class="hint">${esc(z.path)}</span></span>
+  const ticked = new Set([...document.querySelectorAll("#library .pick:checked")].map(b => b.dataset.p));
+  $("#library").innerHTML = r.items.length ? r.items.map(z => `<li><label style="display:flex;gap:8px;align-items:flex-start;min-width:0">
+      <input type="checkbox" class="pick" data-p="${esc(z.path)}" ${ticked.has(z.path) ? "checked" : ""} aria-label="Choose ${esc(z.title)} to combine" style="margin-top:4px">
+      <span><b>${esc(z.title)}</b> <span class="hint">${(z.size / 1e6).toFixed(1)} MB</span><br>
+      <span class="hint">${esc(z.path)}</span></span></label>
       <span style="white-space:nowrap"><button class="preview" data-p="${esc(z.path)}">Preview</button>
       <button class="libopen" data-p="${esc(z.path)}">Open folder</button></span></li>`).join("")
     : '<li class="hint">Nothing yet.</li>';
   $("#library").querySelectorAll(".preview").forEach(b => b.onclick = () => openZim(b.dataset.p));
   $("#library").querySelectorAll(".libopen").forEach(b => b.onclick = () => api("/api/open", {method: "POST", body: JSON.stringify({path: b.dataset.p})}));
+  $("#library").querySelectorAll(".pick").forEach(b => b.onchange = showCombine);
+  showCombine();
 }
+function picked() { return [...document.querySelectorAll("#library .pick:checked")].map(b => b.dataset.p); }
+function showCombine() {
+  const n = picked().length, any = document.querySelectorAll("#library .pick").length > 1;
+  $("#combinehint").style.display = any && n < 2 ? "" : "none";
+  $("#combinebar").style.display = n >= 2 ? "" : "none";
+  $("#combine").textContent = `Combine ${n} into one ZIM`;
+}
+$("#combine").onclick = async () => {
+  askToNotify();
+  $("#combine").disabled = true; $("#combinemsg").textContent = "";
+  try {
+    await api("/api/jobs", {method: "POST", body: JSON.stringify({zims: picked(), title: $("#combinetitle").value,
+      output_dir: $("#outdir").value.trim(), profile: settings ? settings.active : undefined})});
+    $("#combinemsg").innerHTML = '<span class="good">Started — see Jobs.</span>';
+    document.querySelectorAll("#library .pick").forEach(b => b.checked = false);
+    $("#combinetitle").value = ""; showCombine();
+    poll();
+  } catch (e) { $("#combinemsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  $("#combine").disabled = false;
+};
 $("#openzim").onclick = () => { const p = $("#zimpath").value.trim(); if (p) openZim(p); };
 $("#zimpath").addEventListener("keydown", e => { if (e.key === "Enter") $("#openzim").click(); });
 

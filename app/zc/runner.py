@@ -44,6 +44,33 @@ def main(job_dir):
             log(f"Profile: {job['profile']} (image quality: {job.get('quality', 'balanced')}, "
                 f"picture detection: {job.get('sensitivity', 'balanced')})")
 
+        def save(tmp, name, status):
+            if job.get("neutral_names"):  # the file name doesn't say what's inside (its own title and pages do)
+                n = 1
+                while os.path.exists(os.path.join(out_dir, time.strftime(f"zim-%Y%m%d-{n}.zim"))):
+                    n += 1
+                dest = os.path.join(out_dir, time.strftime(f"zim-%Y%m%d-{n}.zim"))
+            else:
+                dest = unique(os.path.join(out_dir, C.safe_filename(name) + ".zim"))
+            log.stage(f"Saving {os.path.basename(dest)}")
+            shutil.move(tmp, dest)
+            size = os.path.getsize(dest)
+            result["files"].append({"path": C.to_win(dest), "size": size, "check": status})
+            log(f"saved {C.to_win(dest)} ({size / 1e6:.1f} MB)")
+
+        # ZIM files only: combine them into one
+        if job["sources"] and all(s.get("type") == "zim" for s in job["sources"]):
+            from zc import merge
+            tmp = os.path.join(job_dir, "out1.zim")
+            try:
+                name, status = merge.merge(log, [s["path"] for s in job["sources"]], tmp, job.get("title", ""))
+                save(tmp, name, status)
+            finally:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            log.stage("Done", status="done")
+            return
+
         # 1. expand sources into volumes (an archive.org item can contain several books;
         #    loose pictures from the whole job become one gallery)
         plan, pictures, av, subtitles = [], [], [], []
@@ -163,15 +190,7 @@ def main(job_dir):
             log.stage(f"Building ZIM {g}/{len(groups)}: {name}")
             try:  # one ZIM failing doesn't stop the others
                 status = builder.build(log, group, tmp, title or None)
-                if job.get("neutral_names"):  # the file name doesn't say what's inside (its own title and pages do)
-                    n = 1
-                    while os.path.exists(os.path.join(out_dir, time.strftime(f"zim-%Y%m%d-{n}.zim"))):
-                        n += 1
-                    dest = os.path.join(out_dir, time.strftime(f"zim-%Y%m%d-{n}.zim"))
-                else:
-                    dest = unique(os.path.join(out_dir, C.safe_filename(name + suffix) + ".zim"))
-                log.stage(f"Saving {os.path.basename(dest)}")
-                shutil.move(tmp, dest)
+                save(tmp, name + suffix, status)
             except Exception as e:  # noqa: BLE001
                 result["errors"].append(f"{name}: {e}")
                 log(f"ERROR building {name}: {e}")
@@ -179,9 +198,6 @@ def main(job_dir):
                 if os.path.exists(tmp):
                     os.remove(tmp)
                 continue
-            size = os.path.getsize(dest)
-            result["files"].append({"path": C.to_win(dest), "size": size, "check": status})
-            log(f"saved {C.to_win(dest)} ({size / 1e6:.1f} MB)")
         if not result["files"]:
             raise RuntimeError("No ZIM could be built.")
         log.stage("Done" + (" (with some errors)" if result["errors"] else ""), status="done")

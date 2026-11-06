@@ -368,6 +368,21 @@ def new_job(body):
         if not os.path.exists(wp):
             raise ValueError(f"File not found: {p}")
         sources.append({"type": "file", "path": wp, "name": os.path.basename(wp)})
+    zims = body.get("zims") or []
+    if zims:   # "Combine into one ZIM": ZIM files only
+        if sources:
+            raise ValueError("Combine ZIM files on their own, not together with other sources.")
+        for p in zims:
+            p = str(p)
+            try:
+                wp = p if p.startswith("/") else C.to_wsl(p)
+            except Exception:  # noqa: BLE001
+                raise ValueError(f"No ZIM file at {p}") from None
+            if not wp.lower().endswith(".zim") or not os.path.isfile(wp):
+                raise ValueError(f"No ZIM file at {p}")
+            sources.append({"type": "zim", "path": wp, "name": os.path.basename(wp)})
+        if len({os.path.realpath(s["path"]) for s in sources}) < 2:
+            raise ValueError("Choose at least two different ZIM files to combine.")
     if not sources:
         raise ValueError("Add at least one web address or file.")
     out_dir = str(body.get("output_dir") or "").strip()
@@ -380,7 +395,7 @@ def new_job(body):
     jid = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
     d = os.path.join(C.JOBS, jid)
     os.makedirs(d)
-    label = ", ".join((s.get("name") or s.get("id")) for s in sources)
+    label = ("Combine: " if zims else "") + ", ".join((s.get("name") or s.get("id")) for s in sources)
     from zc import settings
     st = settings.load()
     pname = body.get("profile") if body.get("profile") in st["profiles"] else st["active"]
@@ -410,7 +425,7 @@ def rerun_job(jid):
     except (OSError, ValueError):
         raise ValueError("That job's details are gone (cleared from the history).") from None
     for s in old.get("sources", []):
-        if s.get("type") == "file" and not os.path.exists(s.get("path", "")):
+        if s.get("type") in ("file", "zim") and not os.path.exists(s.get("path", "")):
             uploaded = os.path.realpath(s.get("path", "")).startswith(os.path.realpath(C.UPLOADS) + os.sep)
             raise ValueError(f"{s.get('name') or 'A file'} isn't there any more"
                              + (" (uploaded copies are removed after a job): add the file again." if uploaded else "."))

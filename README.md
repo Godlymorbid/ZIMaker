@@ -139,6 +139,16 @@ ZIMaker never contacts the library in this case, your browser does, so it's exac
 
 The viewer shows the ZIM's pages without running their scripts, so a ZIM from anywhere can't reach ZIMaker or your files. Pages that need JavaScript to work look better in Kiwix.
 
+### Combine ZIM files into one
+
+In **Your ZIM files**, tick two or more ZIMs (any you've made or opened, including ones from Kiwix) and click **Combine into one ZIM**. Give it a title if you like. It's saved to the folder in step 2.
+
+- Each ZIM goes into its own folder inside the new one, behind a new front page that lists them with their icons. Their own links and shortcuts keep working.
+- Search covers all of them: the new ZIM gets one search index across everything.
+- The originals aren't changed.
+- **ZIMs made by zimit** (Kiwix's tool for recording whole websites) can't be combined. They replay the site with code that only works at the top of a ZIM, so ZIMaker says so instead of making a broken file. Open those on their own.
+- It copies every page and builds a new search index, so big ZIMs take a while and need about as much free space again. A full Wikipedia would take hours. Pictures that appear in two ZIMs are stored twice.
+
 ## What it accepts
 
 | Kind | Formats | What you get |
@@ -174,7 +184,7 @@ The viewer shows the ZIM's pages without running their scripts, so a ZIM from an
 - DjVu: convert to PDF first.
 - Apple iWork files (Pages, Keynote, Numbers): export them first.
 - WARC web archives.
-- ZIM files: these open in the viewer instead.
+- ZIM files: these open in the viewer instead, or can be [combined into one](#combine-zim-files-into-one).
 
 The app says why when you add one of these.
 
