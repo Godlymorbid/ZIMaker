@@ -139,6 +139,17 @@ ZIMaker never contacts the library in this case, your browser does, so it's exac
 
 The viewer shows the ZIM's pages without running their scripts, so a ZIM from anywhere can't reach ZIMaker or your files. Pages that need JavaScript to work look better in Kiwix.
 
+### Edit a ZIM
+
+Click **Edit** next to any ZIM in **Your ZIM files**, including ones downloaded from Kiwix. ZIM files can't be changed in place, so ZIMaker makes a changed copy, saved to the folder in step 2. The original isn't touched.
+
+- **Details:** a new title, description, language or icon.
+- **Make it smaller:** leave out audio and video; recompress pictures as WebP (often halves a picture-heavy ZIM; pictures that wouldn't get smaller are kept); or leave out all pictures for a text-only copy.
+- **Clean the pages:** remove the pages' scripts, for ZIMs that show ads, blank pages or "please enable JavaScript" in Kiwix. Things that need scripts, such as some menus, stop working.
+- **Remove pages:** tick folders of pages, or list pages and folders by their path inside the ZIM. A removed page is replaced by a short note, so links to it still lead somewhere, and pictures and files in a removed folder are left out.
+
+All of these can be combined in one go. The copy gets its own name in Kiwix's library, so it doesn't replace the original there. ZIMs made by zimit can't be edited, for the same reason they can't be combined.
+
 ### Combine ZIM files into one
 
 In **Your ZIM files**, tick two or more ZIMs (any you've made or opened, including ones from Kiwix) and click **Combine into one ZIM**. Give it a title if you like. It's saved to the folder in step 2.

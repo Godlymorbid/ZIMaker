@@ -71,6 +71,20 @@ def main(job_dir):
             log.stage("Done", status="done")
             return
 
+        # one ZIM to edit: a changed copy
+        if job["sources"] and job["sources"][0].get("type") == "zimedit":
+            from zc import edit
+            tmp = os.path.join(job_dir, "out1.zim")
+            opts = job.get("edit") or {}
+            try:
+                name, status = edit.edit(log, job["sources"][0]["path"], tmp, opts)
+                save(tmp, name if (opts.get("title") or "").strip() else f"{name} (edited)", status)
+            finally:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            log.stage("Done", status="done")
+            return
+
         # 1. expand sources into volumes (an archive.org item can contain several books;
         #    loose pictures from the whole job become one gallery)
         plan, pictures, av, subtitles = [], [], [], []
@@ -215,7 +229,8 @@ def main(job_dir):
         complete = (result["files"] and not result["errors"] and not log.warnings
                     and all(f["check"] == "pass" for f in result["files"]))
         uploads = os.path.realpath(C.UPLOADS)
-        for s in job.get("sources", []):  # uploaded copies are no longer needed
+        icon = (job.get("edit") or {}).get("icon")
+        for s in job.get("sources", []) + ([{"type": "icon", "path": icon}] if icon else []):  # uploaded copies
             p = s.get("path", "")
             folder = os.path.dirname(os.path.realpath(p)) if p else ""
             if p and os.path.dirname(folder) == uploads:  # only ever one upload's own folder inside uploads

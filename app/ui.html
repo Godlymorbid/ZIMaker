@@ -17,10 +17,10 @@ try {
 @media (prefers-color-scheme:dark){:root:not([data-theme=light]){color-scheme:dark;--bg:#1b1a18;--card:#262421;--ink:#eee;--mute:#aaa;--line:#3b3833;--acc:#e08a7a;--on-acc:#1b1a18;--acc2:#f0a090;--ok:#7bc67e;--bad:#ff8a80}}
 :root[data-theme=dark]{color-scheme:dark;--bg:#1b1a18;--card:#262421;--ink:#eee;--mute:#aaa;--line:#3b3833;--acc:#e08a7a;--on-acc:#1b1a18;--acc2:#f0a090;--ok:#7bc67e;--bad:#ff8a80}
 select{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 8px;max-width:100%}
-#settings{position:fixed;inset:0;display:none;z-index:15;background:rgba(0,0,0,.45);overflow:auto;padding:30px 16px}
-#settings .panel{max-width:720px;margin:0 auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
-#settings h2{font-size:18px;margin:0 0 4px}
-#settings h3{font-size:15px;margin:18px 0 6px;padding-top:12px;border-top:1px solid var(--line)}
+#settings,#editor{position:fixed;inset:0;display:none;z-index:15;background:rgba(0,0,0,.45);overflow:auto;padding:30px 16px}
+#settings .panel,#editor .panel{max-width:720px;margin:0 auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+#settings h2,#editor h2{font-size:18px;margin:0 0 4px}
+#settings h3,#editor h3{font-size:15px;margin:18px 0 6px;padding-top:12px;border-top:1px solid var(--line)}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
 .seg label{padding:6px 14px;cursor:pointer;border-right:1px solid var(--line)}
 .seg label:last-child{border-right:none}
@@ -266,6 +266,46 @@ body.dragging #drop{display:flex}
     <button id="cancelsettings">Cancel</button><button class="primary" id="savesettings">Save</button>
   </div>
 </div></div>
+<div id="editor" class="overlay" role="dialog" aria-modal="true" aria-labelledby="editor-title"><div class="panel">
+  <div class="row" style="justify-content:space-between;margin:0"><h2 id="editor-title">Edit a copy</h2><button id="closeeditor" aria-label="Close">✕</button></div>
+  <div class="hint">ZIM files can't be changed in place, so this makes a changed copy, saved to the folder in step 2. The original isn't touched.</div>
+  <div id="e-loading" class="hint" style="margin-top:10px">Looking inside…</div>
+  <div id="e-body" style="display:none">
+    <div id="e-summary" class="hint" style="margin-top:8px"></div>
+
+    <h3>Details</h3>
+    <div class="proxy-grid">
+      <label>Title <input type="text" id="e-title" maxlength="200"></label>
+      <label>Language <span class="hint">(3-letter codes, e.g. eng or eng,fra)</span> <input type="text" id="e-lang" maxlength="60"></label>
+    </div>
+    <label style="display:block;margin-top:8px">Description <input type="text" id="e-desc" maxlength="500" style="width:100%"></label>
+    <label style="display:block;margin-top:8px">New icon <span class="hint">(optional: any picture; shown 48×48 in Kiwix)</span> <input type="file" id="e-icon" accept="image/*"></label>
+
+    <h3>Make it smaller</h3>
+    <label class="opt"><input type="checkbox" id="e-media"> Leave out audio and video <span class="hint" id="e-nmedia"></span></label>
+    <div style="margin-top:4px"><b>Pictures</b> <span class="hint" id="e-nimages"></span></div>
+    <label class="opt"><input type="radio" name="e-img" value="keep" checked> Keep as they are</label>
+    <label class="opt"><input type="radio" name="e-img" value="webp"> Recompress as WebP
+      <select id="e-quality" aria-label="Picture quality"><option value="small">small files</option><option value="balanced" selected>balanced</option><option value="sharp">sharp</option></select>
+      <small>Often halves a picture-heavy ZIM. Animated pictures and ones that wouldn't get smaller are kept.</small></label>
+    <label class="opt"><input type="radio" name="e-img" value="none"> Leave out all pictures (text only)</label>
+
+    <h3>Clean the pages</h3>
+    <label class="opt"><input type="checkbox" id="e-clean"> Remove the pages' scripts
+      <small>For ZIMs that show ads, blank pages or "please enable JavaScript" in Kiwix: pages are saved as they look without scripts, with hidden content shown. Things that need scripts (some menus, interactive maps) stop working.</small></label>
+
+    <h3>Remove pages</h3>
+    <div class="hint">A removed page is replaced by a short note, so links to it still lead somewhere.</div>
+    <ul class="items" id="e-folders" style="max-height:260px;overflow:auto"></ul>
+    <label style="display:block;margin-top:8px">Other pages or folders to remove <span class="hint">(one per line, their path inside the ZIM; a folder ends in /)</span>
+      <textarea id="e-remove" rows="3" style="width:100%"></textarea></label>
+
+    <div class="row" style="margin-top:20px;justify-content:flex-end">
+      <span class="hint" id="e-msg" aria-live="polite"></span>
+      <button id="canceleditor">Cancel</button><button class="primary" id="e-start">Make the edited copy</button>
+    </div>
+  </div>
+</div></div>
 <main>
   <header>
     <div><h1>ZIMaker</h1>
@@ -483,13 +523,67 @@ async function loadLibrary() {
       <span><b>${esc(z.title)}</b> <span class="hint">${(z.size / 1e6).toFixed(1)} MB</span><br>
       <span class="hint">${esc(z.path)}</span></span></label>
       <span style="white-space:nowrap"><button class="preview" data-p="${esc(z.path)}">Preview</button>
+      <button class="libedit" data-p="${esc(z.path)}">Edit</button>
       <button class="libopen" data-p="${esc(z.path)}">Open folder</button></span></li>`).join("")
     : '<li class="hint">Nothing yet.</li>';
   $("#library").querySelectorAll(".preview").forEach(b => b.onclick = () => openZim(b.dataset.p));
   $("#library").querySelectorAll(".libopen").forEach(b => b.onclick = () => api("/api/open", {method: "POST", body: JSON.stringify({path: b.dataset.p})}));
   $("#library").querySelectorAll(".pick").forEach(b => b.onchange = showCombine);
+  $("#library").querySelectorAll(".libedit").forEach(b => b.onclick = () => openEditor(b.dataset.p));
   showCombine();
 }
+// ---- Edit: a changed copy of one ZIM (details, smaller, cleaner, pages removed)
+let editing_zim = null;
+const num = n => Number(n).toLocaleString();
+async function openEditor(path) {
+  editing_zim = path;
+  $("#editor").style.display = "block";
+  $("#e-body").style.display = "none"; $("#e-loading").style.display = ""; $("#e-loading").textContent = "Looking inside…";
+  $("#e-msg").textContent = ""; $("#e-icon").value = ""; $("#e-remove").value = "";
+  $("#e-media").checked = false; $("#e-clean").checked = false;
+  document.querySelector("input[name=e-img][value=keep]").checked = true;
+  let o;
+  try { o = await api("/api/zim/overview", {method: "POST", body: JSON.stringify({path})}); }
+  catch (e) { $("#e-loading").innerHTML = `<span class="err">${esc(e.message)}</span>`; return; }
+  if (editing_zim !== path) return;
+  $("#editor-title").textContent = `Edit a copy of ${o.title}`;
+  $("#e-title").value = o.title; $("#e-desc").value = o.description; $("#e-lang").value = o.language;
+  $("#e-title").dataset.orig = o.title; $("#e-desc").dataset.orig = o.description; $("#e-lang").dataset.orig = o.language;
+  const c = o.counts, more = o.partial ? "+" : "";
+  $("#e-summary").textContent = `${num(c.pages)}${more} pages · ${num(c.images)}${more} pictures · ${num(c.media)}${more} audio/video files · `
+    + `${(o.size / 1e6).toFixed(1)} MB` + (o.search ? " · full-text search" : "");
+  $("#e-nmedia").textContent = `(${num(c.media)}${more})`; $("#e-nimages").textContent = `(${num(c.images)}${more})`;
+  $("#e-media").disabled = !c.media;
+  $("#e-folders").innerHTML = o.folders.length
+    ? o.folders.map(f => `<li><label style="display:flex;gap:8px;align-items:center;min-width:0"><input type="checkbox" class="e-fold" value="${esc(f.path)}">
+        <span style="word-break:break-all">${esc(f.path)}</span> <span class="hint" style="white-space:nowrap">${num(f.pages)} pages</span></label></li>`).join("")
+    : '<li class="hint">This ZIM has no folders of pages to choose from; list pages below instead.</li>';
+  $("#e-loading").style.display = "none"; $("#e-body").style.display = "";
+}
+function closeEditor() { $("#editor").style.display = "none"; editing_zim = null; }
+$("#closeeditor").onclick = $("#canceleditor").onclick = closeEditor;
+$("#editor").onclick = e => { if (e.target.id === "editor") closeEditor(); };
+document.addEventListener("keydown", e => { if (e.key === "Escape" && $("#editor").style.display === "block") closeEditor(); });
+$("#e-start").onclick = async () => {
+  const changed = id => { const v = $(id).value.trim(); return v !== ($(id).dataset.orig || "").trim() ? v : ""; };
+  const body = {path: editing_zim, title: changed("#e-title"), description: changed("#e-desc"), language: changed("#e-lang"),
+    media: $("#e-media").checked, images: document.querySelector("input[name=e-img]:checked").value,
+    quality: $("#e-quality").value, clean: $("#e-clean").checked,
+    remove: [...document.querySelectorAll(".e-fold:checked")].map(b => b.value)
+      .concat($("#e-remove").value.split("\n").map(s => s.trim()).filter(Boolean))};
+  $("#e-start").disabled = true; $("#e-msg").textContent = "";
+  try {
+    const f = $("#e-icon").files[0];
+    if (f) body.icon = (await api("/api/upload?name=" + encodeURIComponent(f.name), {method: "PUT", body: f})).path;
+    askToNotify();
+    await api("/api/jobs", {method: "POST", body: JSON.stringify({edit: body, output_dir: $("#outdir").value.trim(),
+      profile: settings ? settings.active : undefined})});
+    closeEditor();
+    $("#combinemsg").innerHTML = '<span class="good">Edited copy started — see Jobs.</span>';
+    poll();
+  } catch (e) { $("#e-msg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  $("#e-start").disabled = false;
+};
 function picked() { return [...document.querySelectorAll("#library .pick:checked")].map(b => b.dataset.p); }
 function showCombine() {
   const n = picked().length, any = document.querySelectorAll("#library .pick").length > 1;

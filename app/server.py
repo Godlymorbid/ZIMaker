@@ -368,6 +368,29 @@ def new_job(body):
         if not os.path.exists(wp):
             raise ValueError(f"File not found: {p}")
         sources.append({"type": "file", "path": wp, "name": os.path.basename(wp)})
+    edit_opts = None
+    if isinstance(body.get("edit"), dict):   # "Edit": a changed copy of one ZIM
+        from zc import edit
+        e = body["edit"]
+        p = str(e.get("path") or "")
+        try:
+            wp = p if p.startswith("/") else C.to_wsl(p)
+        except Exception:  # noqa: BLE001
+            raise ValueError(f"No ZIM file at {p}") from None
+        if not wp.lower().endswith(".zim") or not os.path.isfile(wp):
+            raise ValueError(f"No ZIM file at {p}")
+        edit_opts = edit.clean_options(e)
+        if edit_opts["icon"]:   # an uploaded picture: exactly one level inside the uploads folder
+            ip = os.path.realpath(edit_opts["icon"])
+            if os.path.dirname(os.path.dirname(ip)) != os.path.realpath(C.UPLOADS) or not os.path.isfile(ip):
+                raise ValueError("bad icon file")
+            edit_opts["icon"] = ip
+        if not (edit_opts["title"] or edit_opts["description"] or edit_opts["language"] or edit_opts["icon"]
+                or edit_opts["media"] or edit_opts["images"] != "keep" or edit_opts["clean"] or edit_opts["remove"]):
+            raise ValueError("Nothing to change: choose at least one change.")
+        if sources:
+            raise ValueError("Edit a ZIM on its own, not together with other sources.")
+        sources.append({"type": "zimedit", "path": wp, "name": os.path.basename(wp)})
     zims = body.get("zims") or []
     if zims:   # "Combine into one ZIM": ZIM files only
         if sources:
@@ -395,14 +418,14 @@ def new_job(body):
     jid = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
     d = os.path.join(C.JOBS, jid)
     os.makedirs(d)
-    label = ("Combine: " if zims else "") + ", ".join((s.get("name") or s.get("id")) for s in sources)
+    label = ("Combine: " if zims else "Edit: " if edit_opts else "") + ", ".join((s.get("name") or s.get("id")) for s in sources)
     from zc import settings
     st = settings.load()
     pname = body.get("profile") if body.get("profile") in st["profiles"] else st["active"]
     prof = st["profiles"][pname]
     job = {"sources": sources, "mode": body.get("mode", "pictures"), "combine": bool(body.get("combine")),
            "title": body.get("title", ""), "output_dir": out_dir, "created": time.time(),
-           "label": C.clip(label, 120), "profile": pname, "neutral_names": st["neutral_names"],
+           "label": C.clip(label, 120), "profile": pname, **({"edit": edit_opts} if edit_opts else {}), "neutral_names": st["neutral_names"],
            "quality": prof["quality"], "sensitivity": prof["sensitivity"],
            # from the watched folder, with "delete each file after its ZIM is made" on
            "delete_sources": bool(body.get("delete_sources")),
@@ -425,7 +448,7 @@ def rerun_job(jid):
     except (OSError, ValueError):
         raise ValueError("That job's details are gone (cleared from the history).") from None
     for s in old.get("sources", []):
-        if s.get("type") in ("file", "zim") and not os.path.exists(s.get("path", "")):
+        if s.get("type") in ("file", "zim", "zimedit") and not os.path.exists(s.get("path", "")):
             uploaded = os.path.realpath(s.get("path", "")).startswith(os.path.realpath(C.UPLOADS) + os.sep)
             raise ValueError(f"{s.get('name') or 'A file'} isn't there any more"
                              + (" (uploaded copies are removed after a job): add the file again." if uploaded else "."))
@@ -793,6 +816,16 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/zim/open":
             try:
                 return self._json(zim_open(self._body().get("path", "")))
+            except Exception as e:  # noqa: BLE001
+                return self._json({"error": str(e)}, 400)
+        if u.path == "/api/zim/overview":   # for the Edit panel: details, contents, folders that could be removed
+            try:
+                p = str(self._body().get("path", ""))
+                wp = p if p.startswith("/") else C.to_wsl(p)
+                if not wp.lower().endswith(".zim") or not os.path.isfile(wp):
+                    raise RuntimeError(f"No ZIM file at {p}")
+                from zc import edit
+                return self._json(edit.overview(wp))
             except Exception as e:  # noqa: BLE001
                 return self._json({"error": str(e)}, 400)
         if u.path == "/api/proxy/test":
