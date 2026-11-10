@@ -2,7 +2,8 @@
 # http://localhost:8765. See "Docker" in README.md.
 #
 #   docker compose up -d --build
-FROM python:3.12-slim-bookworm
+# Debian 13 (trixie): its zim-tools package has a zimcheck recent enough for the ZIMs this app writes.
+FROM python:3.12-slim-trixie
 
 # The optional tools come with the image. LibreOffice is the big one (about 400 MB): leave it out with
 # --build-arg LIBREOFFICE=0  if you never convert old Office files (DOC, XLS, PPT).
