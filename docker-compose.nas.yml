@@ -1,0 +1,40 @@
+# ZIMaker on a NAS or server (Synology, QNAP, Unraid, Portainer...). This one file is all you need: Docker
+# downloads ZIMaker from GitHub and builds it (about 1 GB, a few minutes the first time).
+#
+#   1. Change the folder on the "/output" line below to where ZIM files should be saved. It must exist.
+#   2. Start it: paste this file into a new Project (Synology Container Manager) or Stack (Portainer),
+#      or save it as docker-compose.yml in an empty folder and run:  docker compose up -d --build
+#   3. Open http://<your NAS's address>:8765 in a browser, e.g. http://192.168.1.20:8765
+#
+# To update ZIMaker later: build the project again (Container Manager: Project -> Action -> Build;
+# or: docker compose build --no-cache && docker compose up -d). Settings, jobs and ZIM files are kept.
+#
+# ZIMaker has no password: anyone on your network who can open that address can use it, and can read the
+# folders listed under "volumes". Don't forward its port to the internet.
+services:
+  zimaker:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.12-slim-bookworm
+        ADD https://github.com/Godlymorbid/ZIMaker/archive/refs/heads/main.tar.gz /tmp/zimaker.tar.gz
+        RUN mkdir -p /opt/zimaker && tar -xzf /tmp/zimaker.tar.gz -C /opt/zimaker --strip-components=1 \
+         && rm /tmp/zimaker.tar.gz && sh /opt/zimaker/docker-build.sh
+        ENTRYPOINT ["tini", "--", "sh", "/opt/zimaker/docker-entrypoint.sh"]
+        CMD ["python3", "-I", "/opt/zimaker/app/server.py"]
+    pull_policy: build
+    image: zimaker
+    container_name: zimaker
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    volumes:
+      - zimaker-data:/data                    # settings, the Jobs list, uploaded files
+      - /volume1/docker/ZIMaker:/output       # where ZIM files are saved  <-- change the part before the colon
+      # - /volume1/downloads:/watch           # a watched folder (Settings -> Watched folder: /watch)
+      # - /volume1/books:/input:ro            # big files to convert by path (/input/book.pdf) instead of uploading
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # a proxy on the NAS itself is reached as host.docker.internal
+
+volumes:
+  zimaker-data:

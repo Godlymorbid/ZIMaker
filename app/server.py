@@ -42,6 +42,19 @@ IDLE_EXIT = 150                 # default seconds without a window (and no job) 
 SERVER = {}
 
 
+def _numeric(host):
+    """Is this Host header a bare address (192.168.1.20:8765, [fd00::2]:8765) or localhost, not another name?"""
+    import ipaddress
+    name = C._host_of(host)
+    if name == "localhost":
+        return True
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        return False
+
+
 def busy():
     with LOCK:
         return bool(QUEUE) or any(p.poll() is None for p in PROCS.values())
@@ -639,6 +652,11 @@ class H(BaseHTTPRequestHandler):
         ok_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"} | EXTRA_HOSTS
         # (a name added for Docker may be served over https by a reverse proxy in front)
         ok_origins = {"http://" + h for h in ok_hosts} | {"https://" + h for h in EXTRA_HOSTS}
+        if C.DOCKER and host not in ok_hosts and _numeric(host):
+            # In Docker the window is opened by the computer's address (http://192.168.1.20:8765), on whatever
+            # port was published. A page that renames a host to get in arrives under its own *name*, never under
+            # a bare address, so an address is let in; the request must then come from that same address.
+            ok_hosts, ok_origins = {host}, {"http://" + host, "https://" + host}
         if host not in ok_hosts or (origin and origin.lower() not in ok_origins) or \
                 (changes and self.headers.get("X-ZIMaker") != "1"):
             self._json({"error": "Not allowed: this request didn't come from ZIMaker's own window."}, 403)

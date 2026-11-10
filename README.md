@@ -50,27 +50,34 @@ Requirements: Python 3.11 or newer (Ubuntu 24.04, Debian 13, Fedora 39 and later
 
 ### Docker
 
-For a home server or NAS, or to keep ZIMaker and everything it installs inside a container. You need Docker with Docker Compose (Docker Desktop on Windows and macOS includes both).
+For a NAS or home server, or to keep ZIMaker and everything it installs inside a container.
+
+**On a NAS or server** (Synology, QNAP, Unraid, Portainer): one file is all you need.
+
+1. Open [`docker-compose.nas.yml`](docker-compose.nas.yml) and copy its contents.
+2. Change the folder on the `/output` line to where ZIM files should be saved (it must exist).
+3. Paste it into a new Project (Synology Container Manager) or Stack (Portainer) and start it. Or save it as `docker-compose.yml` in an empty folder and run `docker compose up -d --build`.
+4. Open `http://<your NAS's address>:8765` in a browser, for example `http://192.168.1.20:8765`.
+
+**On your own computer** (Docker Desktop, or Docker on Linux):
 
 1. Unzip the downloaded zip, or clone the repository: `git clone https://github.com/Godlymorbid/ZIMaker`
 2. In a terminal, in that folder, run: `docker compose up -d --build`
-3. Open **http://localhost:8765** in any browser.
+3. Open **http://localhost:8765** in any browser. ZIM files are saved to the `zims` folder next to `docker-compose.yml`.
 
-The first build downloads about 1 GB (the libraries, FFmpeg, 7-Zip and LibreOffice) and takes a few minutes. After that it starts with the computer and keeps running; stop it with `docker compose stop`.
+Either way, the first build downloads about 1 GB (the libraries, FFmpeg, 7-Zip and LibreOffice) and takes a few minutes. After that ZIMaker starts with the computer and keeps running.
 
 What is different from the desktop versions:
 
-- **Folders.** ZIMaker only sees the folders listed under `volumes` in `docker-compose.yml`, and in its window paths are the container's. ZIM files are saved to `/output`, which is the `zims` folder next to `docker-compose.yml`. The file has ready-made lines to uncomment for a watched folder (`/watch`) and for a folder of big files to convert by path (`/input`). Dragging files onto the window works as usual.
-- **No Quit, no "Open folder", no browser choice.** It has no window of its own and keeps running without one.
-- **Updates.** **Check for updates** tells you when there's a new version. To install it: `git pull`, then `docker compose up -d --build`. Settings, the Jobs list and your ZIM files are kept.
-- **Optional tools** are all part of the image. To leave LibreOffice out (about 400 MB smaller), set `LIBREOFFICE: "0"` under `build: args:` in `docker-compose.yml`.
-- **Who owns the files.** ZIM files belong to user and group 1000. On Linux, if `id -u` shows another number, set `PUID` and `PGID` in `docker-compose.yml`.
-- **A proxy on the same computer** (Tor Browser, Psiphon, an I2P router): inside the container, `127.0.0.1` is the container itself. Use the address `host.docker.internal` in ZIMaker's settings, and set that program to accept connections from Docker, not only from 127.0.0.1. Hyphanet and your own IPFS program are only read at 127.0.0.1: for those, on Linux, use the `network_mode: host` lines at the end of `docker-compose.yml`.
-- **Other computers.** As shipped, only the computer running Docker can open ZIMaker. It has no password, and whoever can open it can read every folder mounted into it. On a network you trust, change the port line to `"8765:8765"` and list the address people will type under `ZIMAKER_HOSTS` (for example `nas.lan:8765`); ZIMaker refuses requests under any other name.
+- **Folders.** ZIMaker only sees the folders listed under `volumes`, and in its window paths are the container's: ZIM files are saved to `/output`. Both files have ready-made lines to uncomment for a watched folder (`/watch`) and for a folder of big files to convert by path (`/input`). Dragging files onto the window works as usual.
+- **No Quit, no "Open folder", no browser choice.** It has no window of its own and keeps running without one. Stop it with `docker compose stop`, or from your NAS's container app.
+- **Updates.** **Check for updates** tells you when there's a new version. To install it, build again: on a NAS, the project's **Build** action (or `docker compose build --no-cache`, then `docker compose up -d`); on your own computer, `git pull`, then `docker compose up -d --build`. Settings, the Jobs list and your ZIM files are kept.
+- **Optional tools** are all part of the image.
+- **Who owns the files.** ZIM files belong to whoever owns the folder they are saved in, so there is normally nothing to set. To choose another user, add `PUID` and `PGID` under `environment:`.
+- **Who can open it.** ZIMaker has no password. On your own computer, only that computer can open it. On a NAS, anyone on your network can, and can read the folders listed under `volumes`: don't forward its port to the internet. It answers under the computer's address (like `192.168.1.20:8765`) and `localhost`; to open it under a name instead (`nas.lan:8765`), list the name under `environment:` as `ZIMAKER_HOSTS: "nas.lan:8765"`.
+- **A proxy on the same computer** (Tor, Psiphon, an I2P router): inside the container, `127.0.0.1` is the container itself. Use the address `host.docker.internal` in ZIMaker's settings, and set that program to accept connections from Docker, not only from 127.0.0.1. Hyphanet and your own IPFS program are only read at 127.0.0.1: for those, on Linux, replace the `ports:` and `extra_hosts:` lines with `network_mode: host`.
 
-Without Compose: `docker build -t zimaker .`, then `docker run -d --name zimaker -p 127.0.0.1:8765:8765 -v zimaker-data:/data -v "$PWD/zims:/output" zimaker`.
-
-To remove it: `docker compose down --rmi local -v` (the `zims` folder stays).
+To remove it: `docker compose down --rmi local -v`, or delete the project in your NAS's container app. The folder with your ZIM files stays.
 
 ## Start it
 
@@ -115,7 +122,7 @@ If an update doesn't finish, close the window and open ZIMaker again. The log is
 
 - **Windows:** `Start ZIMaker (with console).cmd` runs the same app with a visible console that shows any errors.
 - **Linux:** errors are logged to `~/.zimaker/server.log`.
-- **Docker:** `docker compose logs zimaker` shows them. If saving fails with "permission denied", see **Who owns the files** under **Docker**.
+- **Docker:** `docker compose logs zimaker` shows them. If saving fails with "permission denied", see **Who owns the files** under **Docker**; the log's first line says which user ZIMaker runs as.
 
 ## Use it
 
@@ -341,7 +348,7 @@ An encrypted container doesn't help while it's open, and some places force peopl
   - `Create desktop shortcut.cmd`: (re)creates the desktop icon.
   - `Start ZIMaker (with console).cmd`: the launcher with a visible console, for troubleshooting.
 - **Linux:** `install.sh`, `uninstall.sh`, and `zimaker.sh` (the launcher).
-- **Docker:** `Dockerfile`, `docker-compose.yml`, `docker-entrypoint.sh` (starts ZIMaker as the right user) and `.dockerignore`.
+- **Docker:** `docker-compose.nas.yml` (all a NAS needs), `docker-compose.yml` and `Dockerfile` (for your own computer), `docker-build.sh`, `docker-entrypoint.sh` and `docker-env.sh` (what both use), and `.dockerignore`.
 - **All:**
   - `app/setup.py`: first-run setup.
   - `app/server.py`: the local web app.
