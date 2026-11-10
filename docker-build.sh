@@ -6,13 +6,14 @@ D=/opt/zimaker
 . "$D/docker-env.sh"
 
 # The optional tools (Settings -> Optional tools), unless an earlier build step installed them already.
-PKGS="ca-certificates curl tini ffmpeg 7zip unar fonts-dejavu fonts-liberation"
+# zimcheck comes from Debian's zim-tools package: openZIM's own download is too slow from build servers.
+PKGS="ca-certificates curl tini ffmpeg 7zip unar zim-tools fonts-dejavu fonts-liberation"
 OFFICE="libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui libreoffice-draw-nogui"
 if [ "${LIBREOFFICE:-1}" = "1" ] && ! dpkg -s libreoffice-writer-nogui >/dev/null 2>&1; then
   PKGS="$PKGS $OFFICE"
   INSTALL=1
 fi
-if ! command -v tini >/dev/null 2>&1 || ! command -v ffmpeg >/dev/null 2>&1; then
+if ! command -v tini >/dev/null 2>&1 || ! command -v ffmpeg >/dev/null 2>&1 || ! command -v zimcheck >/dev/null 2>&1; then
   INSTALL=1
 fi
 if [ -n "$INSTALL" ]; then
@@ -26,12 +27,13 @@ fi
 # support, which the app otherwise adds the first time a photo needs it (the image's libraries are read-only).
 mkdir -p "$ZIMAKER_HOME" "$ZIMAKER_OUTPUT" "$ZIMAKER_RUNTIME" /watch /input
 python3 -I "$D/app/setup.py"
-# zimcheck and Pandoc are optional on a desktop (they can be fetched later); an image can't add them later, so
-# a download that failed is tried once more, and a build without them fails instead of shipping incomplete
-if ! ls "$ZIMAKER_RUNTIME"/zim-tools/*/zimcheck >/dev/null 2>&1 || ! ls "$ZIMAKER_RUNTIME"/pandoc/*/bin/pandoc >/dev/null 2>&1; then
+# Pandoc is optional on a desktop (it can be fetched later); an image can't add it later, so a download that
+# failed is tried once more, and a build without it or without zimcheck fails instead of shipping incomplete
+if ! ls "$ZIMAKER_RUNTIME"/pandoc/*/bin/pandoc >/dev/null 2>&1; then
   python3 -I "$D/app/setup.py"
-  ls "$ZIMAKER_RUNTIME"/zim-tools/*/zimcheck "$ZIMAKER_RUNTIME"/pandoc/*/bin/pandoc >/dev/null
+  ls "$ZIMAKER_RUNTIME"/pandoc/*/bin/pandoc >/dev/null
 fi
+command -v zimcheck >/dev/null
 python3 -I -c "import sys; sys.path.insert(0, '$D/app'); from zc import deps; deps.enable_heif()"
 find "$ZIMAKER_HOME" -mindepth 1 -delete
 find "$D" -name __pycache__ -type d -prune -exec rm -rf {} +

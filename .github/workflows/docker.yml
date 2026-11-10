@@ -14,7 +14,7 @@ permissions:
 jobs:
   image:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
@@ -60,6 +60,16 @@ jobs:
           test "$(curl -s -o /dev/null -w "%{http_code}" -H "Host: evil.example:8765" http://localhost:8765/api/ping)" = 403
           # the optional tools are in the image
           docker exec zt sh -c 'command -v ffmpeg && command -v soffice && (command -v 7zz || command -v 7z) && command -v unar'
+          # a real conversion: a ZIM in the output folder, which the image's zimcheck passes
+          docker exec -u "$(id -u)" zt sh -c '
+            . /opt/zimaker/docker-env.sh
+            mkdir -p /data/jobs/smoke && cd /data/jobs/smoke
+            for i in $(seq 1 30); do echo "Hello from a container."; done > note.txt
+            echo "{\"sources\": [{\"type\": \"file\", \"path\": \"/data/jobs/smoke/note.txt\", \"name\": \"note.txt\"}], \"mode\": \"pictures\", \"combine\": true, \"title\": \"\", \"output_dir\": \"/output\"}" > job.json
+            python3 -I /opt/zimaker/app/zc/runner.py /data/jobs/smoke || true
+            cat log.txt
+            grep -q "validation passed (zimcheck)" log.txt'
+          ls out/*.zim
           docker rm -f zt
       - uses: docker/build-push-action@v6
         with:

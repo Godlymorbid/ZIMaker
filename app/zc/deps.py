@@ -8,6 +8,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import sys
 import tarfile
 import urllib.request
@@ -89,6 +90,8 @@ def zimcheck_path():
         hits = sorted(glob.glob(pattern))
         if hits:
             return hits[-1]
+    if C.DOCKER:  # the image has Debian's zim-tools package
+        return shutil.which("zimcheck")
     return None
 
 
