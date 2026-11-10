@@ -2,8 +2,13 @@
 # http://localhost:8765. See "Docker" in README.md.
 #
 #   docker compose up -d --build
-# Debian 13 (trixie): its zim-tools package has a zimcheck recent enough for the ZIMs this app writes.
-FROM python:3.12-slim-trixie
+
+# zimcheck (validates finished ZIMs) comes from openZIM's own image: their download server is too slow from build
+# servers, and Debian's zim-tools package is too old for the ZIMs this app writes. That image exists for Intel/AMD
+# only; on ARM, docker-build.sh leaves zimcheck out and ZIMs are checked with libzim instead.
+FROM --platform=linux/amd64 ghcr.io/openzim/zim-tools:3.8.0 AS zimtools
+
+FROM python:3.12-slim-bookworm
 
 # The optional tools come with the image. LibreOffice is the big one (about 400 MB): leave it out with
 # --build-arg LIBREOFFICE=0  if you never convert old Office files (DOC, XLS, PPT).
@@ -11,6 +16,7 @@ ARG LIBREOFFICE=1
 
 # The whole repository, so "Check for updates" can compare this copy with GitHub file by file.
 COPY . /opt/zimaker
+COPY --from=zimtools /usr/local/bin/zimcheck /opt/zimcheck-amd64/zimcheck
 
 # Everything else is in docker-build.sh (shared with docker-compose.nas.yml). The sed is for a copy checked out on
 # Windows with CRLF line ends.

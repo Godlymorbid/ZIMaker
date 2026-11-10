@@ -8,7 +8,6 @@ import json
 import os
 import platform
 import re
-import shutil
 import sys
 import tarfile
 import urllib.request
@@ -90,8 +89,6 @@ def zimcheck_path():
         hits = sorted(glob.glob(pattern))
         if hits:
             return hits[-1]
-    if C.DOCKER:  # the image has Debian's zim-tools package
-        return shutil.which("zimcheck")
     return None
 
 
@@ -177,7 +174,8 @@ def ensure(log=print):
             _install_pandoc(log)
         except Exception as e:  # noqa: BLE001  only needed for office/markup documents
             log(f"Pandoc not available ({e}); DOCX/ODT/RTF/Markdown and similar files can't be converted")
-    if not zimcheck_path():
+    # in Docker the image build supplies zimcheck (docker-build.sh): openZIM's server is too slow from build servers
+    if not zimcheck_path() and not C.DOCKER:
         try:
             _install_zimtools(log)
         except Exception as e:  # noqa: BLE001  validation is optional
