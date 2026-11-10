@@ -144,7 +144,7 @@ def build(log, volumes, out_path, title=None):
     if os.path.exists(out_path):
         os.remove(out_path)
 
-    with Creator(out_path).config_indexing(True, lang) as c:
+    with Creator(out_path).config_indexing(True, lang).config_nbworkers(C.ZIM_WORKERS) as c:
         c.set_mainpath("index" if multi else ("v1/" + v0["main"] if v0["kind"] == "site" else "v1/index"))
         try:
             c.add_illustration(content=_icon(), width=48)   # libzim 4 (content first; it also allows other sizes)
@@ -365,7 +365,11 @@ def check(log, path):
     zc = deps.zimcheck_path()
     if zc:
         try:
-            out = subprocess.run([zc, "-A", path], capture_output=True, text=True, timeout=3 * 3600).stdout
+            # all checks, on several threads (a zimcheck that doesn't know -W: once more without it)
+            out = subprocess.run([zc, "-A", "-W", str(max(1, min(os.cpu_count() or 1, 8))), path],
+                                 capture_output=True, text=True, timeout=3 * 3600).stdout
+            if "Overall Test Status" not in out:
+                out = subprocess.run([zc, "-A", path], capture_output=True, text=True, timeout=3 * 3600).stdout
         except subprocess.TimeoutExpired:
             log("validation took too long (over 3 hours) and was stopped; the ZIM is saved but unchecked")
             return "unchecked"

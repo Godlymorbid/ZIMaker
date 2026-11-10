@@ -177,11 +177,13 @@ def _fix_page(raw, page, o, gone):
     return raw
 
 
-def _removed(path, o):
-    for r in o["remove"]:
-        if path == r.rstrip("/") or (r.endswith("/") and path.startswith(r)):
-            return True
-    return False
+def _remover(o):
+    """A quick test for "is this path among the removed pages and folders?" (asked for every entry)."""
+    exact = {r.rstrip("/") for r in o["remove"]}
+    folders = tuple(r for r in o["remove"] if r.endswith("/"))
+    if not exact:
+        return lambda path: False
+    return lambda path: path in exact or path.startswith(folders)
 
 
 def edit(log, src, out_path, opts):
@@ -197,19 +199,24 @@ def edit(log, src, out_path, opts):
                            f"and {free / 1e9:.1f} GB is free.")
     title = o["title"] or z["title"]
     lang = o["language"] or z["language"] or "eng"
+    merge.roomy_cache()
+    removed = _remover(o)
 
     # 1. what is left out: removed pages become placeholders; removed files, media and pictures go entirely
-    log.stage("Looking through the ZIM")
-    gone, total = set(), 0
-    for e in _entries(a):
-        total += 1
-        if e.is_redirect:
-            continue
-        mime = e.get_item().mimetype
-        k = _kind(mime)
-        if (_removed(e.path, o) and k != "pages") or (o["media"] and k == "media") \
-                or (o["images"] == "none" and k == "images"):
-            gone.add(e.path)
+    #    (nothing to look for when only details change, pictures are recompressed or pages cleaned)
+    gone, total = set(), z["count"]
+    if o["remove"] or o["media"] or o["images"] == "none":
+        log.stage("Looking through the ZIM")
+        total = 0
+        for e in _entries(a):
+            total += 1
+            if e.is_redirect:
+                continue
+            mime = e.get_item().mimetype
+            k = _kind(mime)
+            if (removed(e.path) and k != "pages") or (o["media"] and k == "media") \
+                    or (o["images"] == "none" and k == "images"):
+                gone.add(e.path)
     if o["remove"]:
         log(f"leaving out: {', '.join(o['remove'][:10])}" + (f" and {len(o['remove']) - 10} more" if len(o["remove"]) > 10 else ""))
     if gone:
@@ -219,10 +226,10 @@ def edit(log, src, out_path, opts):
         os.remove(out_path)
     # pictures are recompressed in other processes, started fresh ("spawn"): forking this one while libzim's
     # writer threads run could hang
-    pool = (ProcessPoolExecutor(max(1, min(4, os.cpu_count() or 1)), mp_context=multiprocessing.get_context("spawn"))
+    pool = (ProcessPoolExecutor(max(1, min(8, (os.cpu_count() or 2) - 1)), mp_context=multiprocessing.get_context("spawn"))
             if o["images"] == "webp" else None)
     try:
-        _write(log, a, z, o, out_path, title, lang, gone, total, pool)
+        _write(log, a, z, o, out_path, title, lang, gone, total, pool, removed)
     finally:
         if pool:
             pool.shutdown(cancel_futures=True)
@@ -231,8 +238,8 @@ def edit(log, src, out_path, opts):
     return title, builder.check(log, out_path)
 
 
-def _write(log, a, z, o, out_path, title, lang, gone, total, pool):
-    from libzim.writer import Creator, Hint, Item, StringProvider
+def _write(log, a, z, o, out_path, title, lang, gone, total, pool, removed):
+    from libzim.writer import Creator, Hint, Item
     side, q = settings.QUALITY[o["quality"]][2], settings.QUALITY[o["quality"]][3]
     done = kept_redirects = shrunk = saved_bytes = placeholders = 0
 
@@ -251,12 +258,13 @@ def _write(log, a, z, o, out_path, title, lang, gone, total, pool):
             return self.m
 
         def get_contentprovider(self):
-            return StringProvider(self.c)
+            return merge.provider(self.c)
 
         def get_hints(self):
             return {Hint.FRONT_ARTICLE: self.fr, Hint.COMPRESS: self.cz}
 
-    with Creator(out_path).config_indexing(bool(a.has_fulltext_index), lang.split(",")[0]) as c:
+    with Creator(out_path).config_indexing(bool(a.has_fulltext_index), lang.split(",")[0]) \
+            .config_nbworkers(C.ZIM_WORKERS) as c:
         main = merge._main_path(a)
         if main:
             c.set_mainpath(main)
@@ -326,7 +334,7 @@ def _write(log, a, z, o, out_path, title, lang, gone, total, pool):
             mime = it.mimetype
             t = it.title if it.title != path else ""
             k = _kind(mime)
-            if k == "pages" and _removed(path, o):
+            if k == "pages" and removed(path):
                 placeholders += 1
                 body = (f"<h1>{html.escape(t or posixpath.basename(path))}</h1>"
                         "<p>This page was removed from this copy of the ZIM.</p>")
@@ -342,7 +350,8 @@ def _write(log, a, z, o, out_path, title, lang, gone, total, pool):
                     flush()
                 continue
             compress = not mime.startswith(("image/", "video/", "audio/", "font/")) or mime == "image/svg+xml"
-            c.add_item(It(path, t, mime, bytes(it.content), front=k == "pages" and bool(t), compress=compress))
+            c.add_item(It(path, t, mime, merge.content_of(it, compress), front=k == "pages" and bool(t),
+                          compress=compress))
         if batch:
             flush()
         if o["images"] == "webp":

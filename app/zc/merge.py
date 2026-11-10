@@ -18,6 +18,46 @@ REPLAY_SCRAPERS = ("warc2zim", "zimit")
 SKIP_OLD_NS = ("M/", "X/", "Z/")   # old-style ZIMs: metadata and search indexes (the new ZIM makes its own)
 
 
+BIG = 8 << 20   # items this big (videos, mostly) are handed to the new ZIM in pieces, never held whole in memory
+
+
+def roomy_cache():
+    """Reading every entry of a ZIM in path order jumps between its compressed clusters; libzim remembers only
+    16 MB of opened clusters, so they'd be opened again and again. Give it room (where this libzim can)."""
+    try:
+        import libzim.reader as r
+        if r.get_cluster_cache_max_size() < 512 << 20:
+            r.set_cluster_cache_max_size(512 << 20)
+    except Exception:  # noqa: BLE001  older libzim: no such setting
+        pass
+
+
+def provider(content):
+    """What libzim reads an item's content from: bytes as they are; an item of another ZIM in 4 MB pieces."""
+    from libzim.writer import Blob, ContentProvider, StringProvider
+    if isinstance(content, (bytes, str)):
+        return StringProvider(content)
+
+    class Pieces(ContentProvider):
+        def __init__(self, item):
+            super().__init__()
+            self.item, self.size = item, item.size
+
+        def get_size(self):
+            return self.size
+
+        def gen_blob(self):
+            view = self.item.content
+            for o in range(0, self.size, 4 << 20):
+                yield Blob(bytes(view[o:o + (4 << 20)]))
+    return Pieces(content)
+
+
+def content_of(item, compress):
+    """An item's content for the copy: big uncompressed ones stay in the source ZIM until they're written."""
+    return item if item.size > BIG and not compress else bytes(item.content)
+
+
 def _meta(a, key):
     try:
         return bytes(a.get_metadata(key)).decode("utf-8", "replace").strip()
@@ -72,7 +112,8 @@ def inspect(path):
 def merge(log, paths, out_path, title=""):
     """paths: ZIM files (WSL paths). Writes out_path; returns (title, check result: "pass", "fail", "unchecked")."""
     C.use_lib()
-    from libzim.writer import Creator, Hint, Item, StringProvider
+    from libzim.writer import Creator, Hint, Item
+    roomy_cache()
 
     seen, zims = set(), []
     for p in paths:
@@ -106,7 +147,7 @@ def merge(log, paths, out_path, title=""):
             return self.m
 
         def get_contentprovider(self):
-            return StringProvider(self.c)
+            return provider(self.c)
 
         def get_hints(self):
             return {Hint.FRONT_ARTICLE: self.fr, Hint.COMPRESS: self.cz}
@@ -133,7 +174,8 @@ def merge(log, paths, out_path, title=""):
         os.remove(out_path)
     total = sum(z["count"] for z in zims)
     done = 0
-    with Creator(out_path).config_indexing(True, (langs[0] if langs else "eng").split("-")[0][:3]) as c:
+    with Creator(out_path).config_indexing(True, (langs[0] if langs else "eng").split("-")[0][:3]) \
+            .config_nbworkers(C.ZIM_WORKERS) as c:
         c.set_mainpath("index")
         try:
             c.add_illustration(content=builder._icon(), width=48)
@@ -181,7 +223,8 @@ def merge(log, paths, out_path, title=""):
                     html_page = mime.startswith("text/html")
                     t = it.title if it.title != path else ""
                     compress = not mime.startswith(("image/", "video/", "audio/", "font/")) or mime == "image/svg+xml"
-                    c.add_item(It(pre + path, t, mime, bytes(it.content), front=html_page and bool(t), compress=compress))
+                    c.add_item(It(pre + path, t, mime, content_of(it, compress), front=html_page and bool(t),
+                                  compress=compress))
                     n_items += 1
                 done += 1
                 if done % 2000 == 0:

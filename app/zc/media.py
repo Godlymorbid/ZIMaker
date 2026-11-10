@@ -129,9 +129,18 @@ def prepare(log, items, title, vdir, quality="balanced", subtitles=()):
         if video:
             out = os.path.join(vdir, base + ".webm")
             h = min(max_h, int(video[0].get("height") or max_h))
-            cmd = [ff, "-y", "-i", path, "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "libvpx-vp9", "-b:v", "0",
-                   "-crf", str(crf), "-vf", f"scale=-2:{h - h % 2}", "-deadline", "realtime", "-cpu-used", "8",
-                   "-row-mt", "1", "-c:a", "libopus", "-b:a", f"{min(kbps, 128)}k", "-ac", "2", "-sn", out]
+            # already what readers play (WebM with VP8/VP9/AV1 and Opus/Vorbis), and no taller than the profile
+            # allows: copied as it is, in seconds, instead of encoded again
+            ready = (ext == ".webm" and video[0].get("codec_name") in ("vp8", "vp9", "av1")
+                     and int(video[0].get("height") or 0) and int(video[0].get("height")) <= max_h
+                     and (not audio or audio[0].get("codec_name") in ("opus", "vorbis")))
+            if ready:
+                log(f"[{name}] already WebM: copied without converting")
+                cmd = [ff, "-y", "-i", path, "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy", "-sn", out]
+            else:
+                cmd = [ff, "-y", "-i", path, "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "libvpx-vp9", "-b:v", "0",
+                       "-crf", str(crf), "-vf", f"scale=-2:{h - h % 2}", "-deadline", "realtime", "-cpu-used", "8",
+                       "-row-mt", "1", "-c:a", "libopus", "-b:a", f"{min(kbps, 128)}k", "-ac", "2", "-sn", out]
             _run(log, cmd, dur, name)
             poster = base + ".jpg"
             subprocess.run([ff, "-y", "-ss", str(min(5.0, dur / 10 if dur else 0)), "-i", path, "-frames:v", "1",

@@ -134,6 +134,9 @@ def _pandoc(log, path, name, fmt, mode, vdir):
     return vol
 
 
+_LO_PROFILE = None
+
+
 def _office(log, path, name, mode, vdir):
     """Old/other office formats -> DOCX / XLSX (then Pandoc) or PDF (slides, drawings) with LibreOffice."""
     from . import pdf
@@ -143,7 +146,12 @@ def _office(log, path, name, mode, vdir):
     out_dir = os.path.join(vdir, "office")
     os.makedirs(out_dir, exist_ok=True)
     log(f"[{name}] converting with LibreOffice")
-    r = subprocess.run([soffice, f"-env:UserInstallation=file://{os.path.join(vdir, 'lo-profile')}", "--headless",
+    # one LibreOffice profile for the whole job: making a new one for every file takes seconds each time
+    global _LO_PROFILE
+    if not _LO_PROFILE or not os.path.isdir(_LO_PROFILE):
+        import tempfile
+        _LO_PROFILE = tempfile.mkdtemp(prefix="lo-profile-", dir=os.path.dirname(vdir.rstrip("/")) or None)
+    r = subprocess.run([soffice, f"-env:UserInstallation=file://{_LO_PROFILE}", "--headless",
                         "--convert-to", target, "--outdir", out_dir, path],
                        capture_output=True, text=True, timeout=1800, env=C.proxy_env())
     made = [f for f in os.listdir(out_dir) if f.lower().endswith("." + target)]
@@ -215,6 +223,24 @@ def _text(log, path, stem):
 
 # ---------------------------------------------------------------- images
 
+def _gallery_picture(job):
+    """One picture of a gallery (runs in a worker process). Returns an error message, or None."""
+    path, name, rel, vdir = job
+    try:
+        e = ext(name)
+        if e in (".gif", ".svg"):
+            shutil.copyfile(path, os.path.join(vdir, rel))  # keep animation / vector as-is
+        else:
+            if e in (".heic", ".heif", ".avif"):
+                from . import deps
+                deps.enable_heif(lambda *a: None)   # already installed by the main process; this only switches it on
+            from . import images
+            images.save_photo(path, os.path.join(vdir, rel))
+        return None
+    except Exception as ex:  # noqa: BLE001
+        return str(ex) or type(ex).__name__
+
+
 def prepare_gallery(log, items, title, vdir):
     """items: [(path, display name)] -> one volume of pictures, one per page."""
     from . import deps, images
@@ -222,20 +248,20 @@ def prepare_gallery(log, items, title, vdir):
         deps.enable_heif(log)  # iPhone photos (and AVIF where Pillow lacks it)
     os.makedirs(os.path.join(vdir, "img"), exist_ok=True)
     pages = []
+    todo = []
     for i, (path, name) in enumerate(sorted(items, key=lambda x: _natural(x[1]))):
         e = ext(name)
-        rel = f"img/{i}{e if e in ('.gif', '.svg') else '.webp'}"
-        try:
-            if e in (".gif", ".svg"):
-                shutil.copyfile(path, os.path.join(vdir, rel))  # keep animation / vector as-is
-            else:
-                images.save_photo(path, os.path.join(vdir, rel))
-        except Exception as ex:  # noqa: BLE001
-            log.warn(f"skipped {name}: {ex}")
-            continue
-        pages.append({"label": os.path.splitext(os.path.basename(name))[0], "head": "", "body": "", "image": rel})
-        if i % 20 == 0:
-            log.stage(f"Adding pictures: {title}", i, len(items))
+        todo.append((path, name, f"img/{i}{e if e in ('.gif', '.svg') else '.webp'}", vdir))
+    # several pictures at a time, in other processes (a big photo takes about half a second to shrink and encode)
+    from concurrent.futures import ProcessPoolExecutor
+    with ProcessPoolExecutor(C.WORKERS if len(todo) > 3 else 1) as pool:
+        for i, ((path, name, rel, _), err) in enumerate(zip(todo, pool.map(_gallery_picture, todo, chunksize=4))):
+            if i % 20 == 0:
+                log.stage(f"Adding pictures: {title}", i, len(items))
+            if err:
+                log.warn(f"skipped {name}: {err}")
+                continue
+            pages.append({"label": os.path.splitext(os.path.basename(name))[0], "head": "", "body": "", "image": rel})
     if not pages:
         raise RuntimeError("None of the pictures could be read.")
     log(f"[{title}] {len(pages)} pictures")

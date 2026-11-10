@@ -320,6 +320,9 @@ class NotLibrary(Exception):
     """The link looked like a library's (e.g. ends in /manifest) but isn't one: crawl it as a website instead."""
 
 
+_IIIF_FORM = [0]   # which form of the image address worked last (one library per job)
+
+
 def _iiif_page(args):
     """One IIIF page: its text, and its scan saved as WebP. Returns the page dict."""
     from PIL import Image
@@ -333,12 +336,17 @@ def _iiif_page(args):
     tries = [f"{svc}/full/{images.SCAN_WIDTH},/0/default.jpg", f"{svc}/full/max/0/default.jpg",
              f"{svc}/full/full/0/default.jpg"] if svc else []
     tries += [full] if full else []
+    k = _IIIF_FORM[0]   # the form this library accepted for an earlier page: first, not after two refusals
+    if 0 < k < len(tries):
+        tries.insert(0, tries.pop(k))
+    order = ([k] + [j for j in range(len(tries)) if j != k]) if 0 < k < len(tries) else list(range(len(tries)))
     tmp = os.path.join(vdir, "download", f"{i}.jpg")
-    for src in tries:
+    for j, src in zip(order, tries):
         try:
             _fetch(src, tmp)
             images.save_scan(Image.open(tmp), os.path.join(vdir, "img", f"{i}.webp"))
             page["image"] = f"img/{i}.webp"
+            _IIIF_FORM[0] = j
             break
         except Exception:  # noqa: BLE001  try the next form of the address
             pass

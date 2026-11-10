@@ -1036,46 +1036,59 @@ async function doUpdate() {
     'Details are in <code>%TEMP%\\ZIMaker-update.log</code> (Windows) or <code>~/.zimaker/update.log</code> (Linux).';
 }
 
+const drawn = new WeakMap();
+function setHtml(el, html) {   // true if it changed (and was redrawn)
+  if (drawn.get(el) === html) return false;
+  drawn.set(el, html); el.innerHTML = html;
+  return true;
+}
 async function poll() {
   if (stopped || updating) return;
   try {
-    const s = await api("/api/status");
+    // logs only for the jobs whose log is open here
+    const s = await api("/api/status?logs=" + encodeURIComponent([...openLogs].join(",")));
     const st = s.setup;
     if (st.state === "ready" && !checkedOnce && settings) { checkedOnce = true; if (settings.check_updates) checkUpdate(false); }
     defaultOutput = s.default_output || defaultOutput;
     downloadsDir = s.downloads || downloadsDir;
     const wn = $("#watchnote"), w = s.watch || {};
     wn.style.display = w.folder || w.error ? "block" : "none";
-    wn.innerHTML = w.error ? `<span class="err">${esc(w.error)}</span>`
-      : `Watching <b>${esc(w.folder)}</b>: new files there become ZIMs (⚙ Settings → Watched folder).`;
+    // each part of the page is only redrawn when it changed: redrawing every 2 seconds would reset an open log's
+    // scroll position and selection, drop keyboard focus, and could swallow a click
+    setHtml(wn, w.error ? `<span class="err">${esc(w.error)}</span>`
+      : `Watching <b>${esc(w.folder)}</b>: new files there become ZIMs (⚙ Settings → Watched folder).`);
     $("#setup").style.display = st.state === "ready" ? "none" : "block";
-    $("#setup").innerHTML = st.state === "error" ? `<span class="err">${esc(st.message)}</span>`
-      : `<b>Getting ready…</b> <span class="hint">${esc(st.message || "")}</span><div class="bar indef"><div></div></div>`;
+    setHtml($("#setup"), st.state === "error" ? `<span class="err">${esc(st.message)}</span>`
+      : `<b>Getting ready…</b> <span class="hint">${esc(st.message || "")}</span><div class="bar indef"><div></div></div>`);
     if (!$("#outdir").value && s.default_output) $("#outdir").value = s.default_output;
     if (s.windows === false) $("#paths").placeholder = "/home/you/Downloads/book.pdf  (separate several with ;)";
-    $("#jobs").innerHTML = s.jobs.length ? s.jobs.map(jobHtml).join("") : '<p class="hint">Nothing yet.</p>';
+    if (setHtml($("#jobs"), s.jobs.length ? s.jobs.map(jobHtml).join("") : '<p class="hint">Nothing yet.</p>')) {
+      const jobs = $("#jobs");
+      jobs.querySelectorAll(".rerun").forEach(b => b.onclick = async () => {
+        b.disabled = true;
+        const r = await api(`/api/jobs/${b.dataset.id}/rerun`, {method: "POST", body: "{}"}).catch(e => ({error: e.message}));
+        $("#jobsmsg").innerHTML = r.error ? `<span class="err">${esc(r.error)}</span>` : "";
+        askToNotify(); poll();
+      });
+      jobs.querySelectorAll("details[data-log]").forEach(d => d.ontoggle = () => {
+        if (d.open === openLogs.has(d.dataset.log)) return;   // drawn open: nothing new
+        if (d.open) { openLogs.add(d.dataset.log); poll(); } else openLogs.delete(d.dataset.log);   // fetch its log now
+      });
+      jobs.querySelectorAll(".open").forEach(b => b.onclick = () => api("/api/open", {method: "POST", body: JSON.stringify({path: b.dataset.p})}));
+      jobs.querySelectorAll(".preview").forEach(b => b.onclick = () => openZim(b.dataset.p));
+      jobs.querySelectorAll(".cancel").forEach(b => b.onclick = () => api(`/api/jobs/${b.dataset.id}/cancel`, {method: "POST"}).then(poll));
+      jobs.querySelectorAll(".del").forEach(b => b.onclick = () => api(`/api/jobs/${b.dataset.id}/delete`, {method: "POST"}).then(poll));
+    }
     trackJobs(s.jobs);
-    document.querySelectorAll(".rerun").forEach(b => b.onclick = async () => {
-      b.disabled = true;
-      const r = await api(`/api/jobs/${b.dataset.id}/rerun`, {method: "POST", body: "{}"}).catch(e => ({error: e.message}));
-      $("#jobsmsg").innerHTML = r.error ? `<span class="err">${esc(r.error)}</span>` : "";
-      askToNotify(); poll();
-    });
-    document.querySelectorAll("details[data-log]").forEach(d => d.ontoggle = () => d.open ? openLogs.add(d.dataset.log) : openLogs.delete(d.dataset.log));
-    document.querySelectorAll(".open").forEach(b => b.onclick = () => api("/api/open", {method: "POST", body: JSON.stringify({path: b.dataset.p})}));
-    document.querySelectorAll("#jobs .preview").forEach(b => b.onclick = () => openZim(b.dataset.p));
     const doneNow = s.jobs.filter(j => j.status === "done").length;
     if (doneNow !== lastDone) { lastDone = doneNow; loadLibrary(); }
-    document.querySelectorAll(".cancel").forEach(b => b.onclick = () => api(`/api/jobs/${b.dataset.id}/cancel`, {method: "POST"}).then(poll));
-    document.querySelectorAll(".del").forEach(b => b.onclick = () => api(`/api/jobs/${b.dataset.id}/delete`, {method: "POST"}).then(poll));
   } catch (e) {
     $("#setup").style.display = "block";
-    $("#setup").innerHTML = '<span class="err">ZIMaker isn\'t running any more. Close this window and start it again from the desktop icon.</span>';
+    setHtml($("#setup"), '<span class="err">ZIMaker isn\'t running any more. Close this window and start it again from the desktop icon.</span>');
   }
 }
 loadSettings().catch(() => {});
-loadLibrary();
-poll(); setInterval(poll, 2000);
+poll(); setInterval(poll, 2000);   // the first poll also loads the list of ZIM files
 </script>
 </body>
 </html>

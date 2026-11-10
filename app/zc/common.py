@@ -33,7 +33,9 @@ UPLOADS = os.path.join(HOME, "uploads")
 UA = {"User-Agent": "zimaker/1.0 (personal archiving tool)"}
 
 # How many pages are processed at once. WSL often has only ~3 GB of RAM, so keep this modest.
-WORKERS = max(1, min(3, (os.cpu_count() or 2) - 1))
+WORKERS = max(1, min(6, (os.cpu_count() or 2) - 1))   # processes for page images (each needs up to ~100 MB)
+# threads libzim uses to compress and index while writing a ZIM (its own default is 4, whatever the computer has)
+ZIM_WORKERS = max(4, min(os.cpu_count() or 4, 10))
 BATCH = 24
 
 
@@ -726,7 +728,10 @@ def download(url, dest, log=None, label="", size=0):
         return dest
     for attempt in (1, 2):
         # -q: ignore ~/.curlrc; only http(s), also after redirects
+        # give up on a server that doesn't answer in 30 s or sends under 1 KB/s for a minute (curl's own limits
+        # are 5 minutes and none); the retries then resume where it stopped
         cmd = ["curl", "-q", "-sSL", "--fail", "--proto", "=http,https", "--proto-redir", "=http,https",
+               "--connect-timeout", "30", "--speed-limit", "1000", "--speed-time", "60",
                "--retry", "8", "--retry-delay", "10", "-C", "-", "-o", dest, url]
         if PROXY:  # same proxy as everything else; socks5h: the proxy looks up names
             cmd[2:2] = ["--proxy", _proxy_url()]
@@ -745,6 +750,8 @@ def download(url, dest, log=None, label="", size=0):
         if p.returncode == 0:
             open(dest + ".ok", "w").close()
             return dest
+        if p.returncode == 22:
+            break            # the server said no (not found, forbidden...): asking again won't change it
         if attempt == 1 and os.path.exists(dest):
             os.remove(dest)  # a stale partial file can make resume fail; start over once
     raise RuntimeError(f"Download failed (curl exit {p.returncode}): {url}")

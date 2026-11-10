@@ -5,6 +5,7 @@ Pages are saved as the site serves them; only links are rewritten. Links to page
 internal links. Saving is something the user asks for, so robots.txt doesn't stop it; its Crawl-delay is still
 honoured, to keep crawls polite. Sites that build their pages with JavaScript won't work well.
 """
+import gzip
 import hashlib
 import html
 import json
@@ -12,6 +13,7 @@ import mimetypes
 import os
 import posixpath
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -253,6 +255,8 @@ class Site:
         self.failed = 0
         self.start_error = None
         self.slowed = False  # the site asked us to slow down at least once
+        self.dead = {}       # other hosts (CDNs...) that didn't answer: host -> failures in a row
+        self._gate, self._next = threading.Lock(), 0.0   # spaces out requests to the site when it asks for a delay
         self.single = scope == "page"  # just the linked page (plus its pictures and styles)
         self.robots = urllib.robotparser.RobotFileParser()   # only for its Crawl-delay
         try:
@@ -267,10 +271,15 @@ class Site:
 
     # ---------------------------------------------------------------- fetching
     def _get(self, url, small=False):
-        req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
+        # compressed where the server can: pages and styles are 4-6 times smaller, which matters on slow networks
+        req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*", "Accept-Encoding": "gzip"})
         # Hyphanet: the gateway answers once it has fetched the whole file from the network, which can take minutes
         timeout = (300 if self.hyphanet else (60 if small else 120)) if self.dark else (20 if small else 45)
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            # unpacked as it is read, so the size limits below count the real size
+            r = (gzip.GzipFile(fileobj=resp) if (resp.headers.get("Content-Encoding") or "").strip().lower()
+                 in ("gzip", "x-gzip") else resp)
+            r.headers, r.geturl = resp.headers, resp.geturl
             ctype = r.headers.get_content_type()
             av = self.include_av and ctype.split("/")[0] in ("video", "audio")
             limit = MAX_AV if av else MAX_FILE
@@ -278,7 +287,7 @@ class Site:
                 n = int(r.headers.get("Content-Length") or 0)
             except ValueError:
                 n = 0
-            if n > limit:
+            if n > limit:   # (the packed size, if it's compressed: what is read is checked too)
                 raise RuntimeError("too large")
             if av:  # up to 500 MB: straight to disk, never held in memory (several download at once)
                 tmp = os.path.join(self.store, "part-" + hashlib.sha1(url.encode()).hexdigest())
@@ -301,13 +310,26 @@ class Site:
             return r.geturl(), ctype, r.headers.get_content_charset(), data
 
     def fetch(self, url):
-        if self.delay:
-            time.sleep(min(self.delay, 10))
+        host = urllib.parse.urlsplit(url).netloc
+        own = host in self.hosts
+        if not own and self.dead.get(host, 0) >= 3:
+            # three files in a row from this other host timed out or couldn't connect: don't wait for the rest
+            return url, RuntimeError("this host isn't answering")
+        if self.delay and own:
+            # the site's robots.txt asks for a pause between requests: its own addresses take turns, that far apart
+            # (other hosts, such as CDNs, never asked for one)
+            with self._gate:
+                wait = self._next - time.monotonic()
+                if wait > 0:
+                    time.sleep(wait)
+                self._next = time.monotonic() + min(self.delay, 10)
         elif self.slowed:
             time.sleep(1)  # the site asked us to slow down: stay polite for the rest of the crawl
         for attempt in range(4):
             try:
-                return url, self._get(url)
+                got = self._get(url)
+                self.dead.pop(host, None)
+                return url, got
             except urllib.error.HTTPError as e:
                 # "slow down" / "busy": wait (as long as the site asks, within reason) and try again
                 if e.code not in (429, 503) or attempt == 3:
@@ -323,6 +345,8 @@ class Site:
                 if not (self.dark and isinstance(e, (urllib.error.URLError, TimeoutError, OSError))) or attempt == 3 \
                         or "onion site, which can only" in str(e) or "I2P site, which" in str(e) \
                         or "Hyphanet" in str(e) or "IPFS address" in str(e):
+                    if isinstance(e, (urllib.error.URLError, TimeoutError, OSError)):
+                        self.dead[host] = self.dead.get(host, 0) + 1
                     return url, e
                 time.sleep(5 * (attempt + 1))
         return url, RuntimeError("gave up")
@@ -430,6 +454,11 @@ class Site:
                 if name in ("a", "area", "iframe", "frame") and attr == "href" or name in ("iframe", "frame") and attr == "src":
                     kind = "page"
                 elif name == "link" and attr == "href" and not re.search(r"stylesheet|icon|preload|prefetch|modulepreload|manifest", rel):
+                    # not pages to read: the page's own other addresses (shortlink, canonical), feeds and
+                    # machine interfaces (type=application/...). Followed, they'd be saved as extra copies.
+                    if rewrite is None and (re.search(r"shortlink|canonical|edituri|wlwmanifest|pingback|api\.w\.org|search", rel)
+                                            or re.search(r"""\stype\s*=\s*["']?application/""", tag, re.I)):
+                        return am.group(0)
                     kind = "page"
                 else:
                     kind = "asset"
@@ -496,7 +525,7 @@ class Site:
         log = self.log
         pages, queued, assets = deque([self.start]), {self.start}, set()
         n_pages = 0
-        with ThreadPoolExecutor(1 if self.delay else 2 if self.dark else 4) as pool:
+        with ThreadPoolExecutor(2 if self.dark else 4) as pool:   # a Crawl-delay is kept in fetch()
             while pages and n_pages < self.max_pages:
                 batch = [pages.popleft() for _ in range(min(8, len(pages)))]
                 for url, res in pool.map(self.fetch, batch):
@@ -509,12 +538,24 @@ class Site:
                     if mime in HTML_TYPES:
                         if n_pages >= self.max_pages:
                             continue
+                        # reached through a redirect (/?p=12 -> /a-post/, /docs -> /docs/, http -> https): one page,
+                        # saved once under its real address, not once per address that leads to it
+                        fin, asked = normalize(final), url
+                        if fin and fin != url:
+                            if fin in self.saved:
+                                self.saved[url] = self.saved[fin]
+                                continue
+                            queued.add(fin)
+                            url = fin   # saved under the real address; the one that was asked for points to it
                         text = self._decode(data, charset)
                         if not self.keep_scripts:  # before looking for links: the scripts aren't downloaded either
                             text = static_page(text)
                         t = re.search(r"<title[^>]*>(.*?)</title>", text, re.I | re.S)
                         title = " ".join(html.unescape(t.group(1)).split()) if t else ""
-                        if not self._save(url, b"", "text/html", title, "page"):
+                        new = self._save(url, b"", "text/html", title, "page")
+                        if asked != url:
+                            self.saved[asked] = self.saved[url]
+                        if not new:
                             continue
                         self.raw[url] = (final, text)
                         n_pages += 1

@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import signal
+import stat as statmod
 import subprocess
 import sys
 import threading
@@ -304,40 +305,66 @@ def classify(line):
     return None, "Not a web address or archive.org item"
 
 
-def job_summary(jid):
-    d = os.path.join(C.JOBS, jid)
+_SUMMARY = {}   # job id -> (its files' sizes and times, what was read from them): finished jobs never change
+
+
+def _sig(path):
     try:
-        job = json.load(open(os.path.join(d, "job.json"), encoding="utf-8"))
-    except Exception:  # noqa: BLE001
+        s = os.stat(path)
+        return s.st_mtime_ns, s.st_size
+    except OSError:
         return None
-    st = {}
-    if os.path.exists(os.path.join(d, "state.json")):
+
+
+def job_summary(jid, with_log=True):
+    """What the window shows for a job. Runs for every job on every poll (every 2 seconds), so the job's files are
+    only read again when they changed, and its log only when the window shows it."""
+    d = os.path.join(C.JOBS, jid)
+    sig = tuple(_sig(os.path.join(d, n)) for n in ("job.json", "state.json", "result.json", "log.txt"))
+    if sig[0] is None:
+        _SUMMARY.pop(jid, None)
+        return None
+    hit = _SUMMARY.get(jid)
+    if not hit or hit[0] != sig or (with_log and hit[1]["log"] is None):
         try:
-            st = json.load(open(os.path.join(d, "state.json"), encoding="utf-8"))
+            job = json.load(open(os.path.join(d, "job.json"), encoding="utf-8"))
         except Exception:  # noqa: BLE001
-            pass
-    res = None
-    if os.path.exists(os.path.join(d, "result.json")):
-        try:
-            res = json.load(open(os.path.join(d, "result.json"), encoding="utf-8"))
-        except Exception:  # noqa: BLE001
-            pass
-    status = st.get("status", "queued")
+            return None
+        st = {}
+        if sig[1]:
+            try:
+                st = json.load(open(os.path.join(d, "state.json"), encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                pass
+        res = None
+        if sig[2]:
+            try:
+                res = json.load(open(os.path.join(d, "result.json"), encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                pass
+        log = None
+        if with_log:
+            log = ""
+            try:
+                with open(os.path.join(d, "log.txt"), "rb") as f:  # only the end
+                    f.seek(max(0, (sig[3] or (0, 0))[1] - 48_000))
+                    lines = f.read().decode("utf-8", "replace").splitlines(keepends=True)
+                log = "".join(ln for ln in lines[-200:] if not ln.startswith("Traceback") and not ln.startswith("  File"))
+            except OSError:
+                pass
+        hit = (sig, {"id": jid, "created": job.get("created", 0), "label": job.get("label", ""),
+                     "status": st.get("status", "queued"), "stage": st.get("stage", "Waiting…"),
+                     "done": st.get("done"), "total": st.get("total"), "result": res, "log": log})
+        _SUMMARY[jid] = hit
+    out = dict(hit[1])
+    # whether it's really running depends on this server's processes and queue, so that part is never remembered
     p = PROCS.get(jid)
-    if status == "running" and (p is None or p.poll() is not None) and res is None:
-        status = "interrupted"
+    if out["status"] == "running" and (p is None or p.poll() is not None) and out["result"] is None:
+        out["status"] = "interrupted"
     if jid in QUEUE:
-        status = "queued"
-    log = ""
-    lp = os.path.join(d, "log.txt")
-    if os.path.exists(lp):
-        with open(lp, "rb") as f:  # only the end: this runs for every job, every 2 seconds
-            f.seek(max(0, os.path.getsize(lp) - 48_000))
-            lines = f.read().decode("utf-8", "replace").splitlines(keepends=True)
-        log = "".join(ln for ln in lines[-200:] if not ln.startswith("Traceback") and not ln.startswith("  File"))
-    return {"id": jid, "created": job.get("created", 0), "label": job.get("label", ""), "status": status,
-            "stage": st.get("stage", "Waiting…"), "done": st.get("done"), "total": st.get("total"),
-            "result": res, "log": log}
+        out["status"] = "queued"
+    out["log"] = (out["log"] or "") if with_log else ""
+    return out
 
 
 def new_job(body):
@@ -490,23 +517,26 @@ def watch_once():
         return []
     WATCH.update(error="", folder=w["folder"])
     fid = hashlib.sha1(os.path.realpath(folder).encode()).hexdigest()[:20]
-    try:
-        state = json.load(open(WATCH_STATE, encoding="utf-8"))
-    except (OSError, ValueError):
-        state = {}
+    state = WATCH.get("state")   # kept in memory: this thread is the only one that writes the file
+    if state is None:
+        try:
+            state = json.load(open(WATCH_STATE, encoding="utf-8"))
+        except (OSError, ValueError):
+            state = {}
+        WATCH["state"] = state
     names = [n for n in os.listdir(folder) if not n.startswith(".") and not n.lower().endswith(PARTIAL)]
     files = {}
     for n in names:
         p = os.path.join(folder, n)
         try:
-            s = os.stat(p)
+            s = os.stat(p)   # one look per file: on a Windows folder each one is a round trip
         except OSError:
             continue
-        if os.path.isfile(p):
+        if statmod.S_ISREG(s.st_mode):
             files[p] = (n, s, _file_key(p, s))
     if state.get("folder") != fid or state.get("v") != WATCH_VERSION:
         # a newly watched folder: what's already in it stays as it is, only files added from now on are converted
-        state = {"v": WATCH_VERSION, "folder": fid, "seen": sorted(k for _, _, k in files.values())}
+        state = WATCH["state"] = {"v": WATCH_VERSION, "folder": fid, "seen": sorted(k for _, _, k in files.values())}
         json.dump(state, open(WATCH_STATE, "w", encoding="utf-8"))
         return []
     before = set(state.get("seen", []))
@@ -645,8 +675,13 @@ class H(BaseHTTPRequestHandler):
             self._json(update.check(force))
         elif u.path == "/api/status":
             SEEN["t"] = time.time()
-            ids = sorted(os.listdir(C.JOBS), reverse=True) if os.path.isdir(C.JOBS) else []
-            jobs = [j for j in (job_summary(i) for i in ids[:30]) if j]
+            ids = (sorted(os.listdir(C.JOBS), reverse=True) if os.path.isdir(C.JOBS) else [])[:30]
+            q = urllib.parse.parse_qs(u.query, keep_blank_values=True)   # "logs=" (none open) isn't "no list"
+            # logs only for the jobs whose log is open in the window (an older window sends no list: all of them)
+            logs = set((q.get("logs") or [""])[0].split(",")) if "logs" in q else None
+            jobs = [j for j in (job_summary(i, logs is None or i in logs) for i in ids) if j]
+            for gone in set(_SUMMARY) - set(ids):
+                _SUMMARY.pop(gone, None)
             self._json({"setup": SETUP, "jobs": jobs, "default_output": DEFAULTS.get("output", ""),
                         "windows": C.IS_WSL, "watch": {"folder": WATCH["folder"], "error": WATCH["error"]},
                         "downloads": DEFAULTS.get("downloads", "")})
@@ -718,7 +753,14 @@ class H(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         if total:
-            self.wfile.write(bytes(data[start:end + 1]))
+            # in pieces, without copying: a player asks for "from here to the end" of a video and then hangs up
+            # after a few MB, so the rest is never copied
+            view = memoryview(data)[start:end + 1]
+            try:
+                for i in range(0, len(view), 1 << 20):
+                    self.wfile.write(view[i:i + (1 << 20)])
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
     def do_PUT(self):
         if not self._guard(True):
