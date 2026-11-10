@@ -912,16 +912,18 @@ def download(url, dest, log=None, label="", size=0):
         _download_py(url, dest, log, label, size)
         open(dest + ".ok", "w").close()
         return dest
-    for attempt in (1, 2):
+    had = os.path.getsize(dest) if os.path.exists(dest) else 0
+    restarted = False
+    for attempt in range(1, 41):
         # -q: ignore ~/.curlrc; only http(s), also after redirects
         # give up on a server that doesn't answer in 30 s or sends under 1 KB/s for a minute (curl's own limits
         # are 5 minutes and none); the retries then resume where it stopped
         cmd = ["curl", "-q", "-sSL", "--fail", "--proto", "=http,https", "--proto-redir", "=http,https",
                "--connect-timeout", "30", "--speed-limit", "1000", "--speed-time", "60",
                "--retry", "8", "--retry-delay", "10", "-C", "-", "-o", dest, url]
-        if attempt == 2:
+        if attempt > 1:
             # some servers break off HTTP/2 downloads part-way ("stream was not closed cleanly", seen with
-            # download.openzim.org): the second try uses plain HTTP/1.1
+            # download.openzim.org): later tries use plain HTTP/1.1
             cmd[2:2] = ["--http1.1"]
         if PROXY:  # same proxy as everything else; socks5h: the proxy looks up names
             cmd[2:2] = ["--proxy", _proxy_url()]
@@ -942,8 +944,18 @@ def download(url, dest, log=None, label="", size=0):
             return dest
         if p.returncode == 22:
             break            # the server said no (not found, forbidden...): asking again won't change it
-        if attempt == 1 and os.path.exists(dest):
+        have = os.path.getsize(dest) if os.path.exists(dest) else 0
+        if p.returncode in (18, 56, 92) and have > had:
+            # the server broke the transfer off part-way (curl doesn't retry that itself), but more arrived than
+            # last time: carry on from there (-C -) for as long as each try gets further
+            had = have
+            continue
+        if restarted:
+            break
+        restarted = True
+        if os.path.exists(dest):
             os.remove(dest)  # a stale partial file can make resume fail; start over once
+        had = 0
     raise RuntimeError(f"Download failed (curl exit {p.returncode}): {url}")
 
 
