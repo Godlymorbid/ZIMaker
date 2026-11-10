@@ -27,6 +27,40 @@ jobs:
       - name: Image name (lower case, as the registry needs)
         id: name
         run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      # First the image for this machine only, started and checked, so a broken image is never published.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: zimaker:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Start it and check that it works
+        run: |
+          mkdir -p out
+          docker run -d --name zt -p 8765:8765 -v "$PWD/out:/output" zimaker:test
+          for i in $(seq 1 60); do
+            s="$(curl -fsS http://localhost:8765/api/status || true)"
+            case "$s" in *'"state": "ready"'*) break ;; esac
+            sleep 2
+          done
+          docker logs zt
+          echo "$s" | python3 -c '
+          import json, sys
+          s = json.load(sys.stdin)
+          assert s["setup"]["state"] == "ready" and s["setup"]["zimcheck"], s["setup"]
+          assert s["docker"] is True and s["default_output"] == "/output", s
+          '
+          # runs as the owner of the mounted folder, and can write there
+          docker logs zt 2>&1 | grep -q "runs as user $(id -u),"
+          docker exec -u "$(id -u)" zt sh -c 'touch /output/write-test && touch /data/write-test'
+          test "$(stat -c %u out/write-test)" = "$(id -u)"
+          # opened by address (as on a NAS): let in; under an unknown name: refused
+          test "$(curl -s -o /dev/null -w "%{http_code}" -H "Host: 192.168.1.20:8765" http://localhost:8765/api/ping)" = 200
+          test "$(curl -s -o /dev/null -w "%{http_code}" -H "Host: evil.example:8765" http://localhost:8765/api/ping)" = 403
+          # the optional tools are in the image
+          docker exec zt sh -c 'command -v ffmpeg && command -v soffice && (command -v 7zz || command -v 7z) && command -v unar'
+          docker rm -f zt
       - uses: docker/build-push-action@v6
         with:
           context: .

@@ -26,6 +26,12 @@ fi
 # support, which the app otherwise adds the first time a photo needs it (the image's libraries are read-only).
 mkdir -p "$ZIMAKER_HOME" "$ZIMAKER_OUTPUT" "$ZIMAKER_RUNTIME" /watch /input
 python3 -I "$D/app/setup.py"
+# zimcheck and Pandoc are optional on a desktop (they can be fetched later); an image can't add them later, so
+# a download that failed is tried once more, and a build without them fails instead of shipping incomplete
+if ! ls "$ZIMAKER_RUNTIME"/zim-tools/*/zimcheck >/dev/null 2>&1 || ! ls "$ZIMAKER_RUNTIME"/pandoc/*/bin/pandoc >/dev/null 2>&1; then
+  python3 -I "$D/app/setup.py"
+  ls "$ZIMAKER_RUNTIME"/zim-tools/*/zimcheck "$ZIMAKER_RUNTIME"/pandoc/*/bin/pandoc >/dev/null
+fi
 python3 -I -c "import sys; sys.path.insert(0, '$D/app'); from zc import deps; deps.enable_heif()"
 find "$ZIMAKER_HOME" -mindepth 1 -delete
 find "$D" -name __pycache__ -type d -prune -exec rm -rf {} +

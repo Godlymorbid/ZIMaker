@@ -919,6 +919,10 @@ def download(url, dest, log=None, label="", size=0):
         cmd = ["curl", "-q", "-sSL", "--fail", "--proto", "=http,https", "--proto-redir", "=http,https",
                "--connect-timeout", "30", "--speed-limit", "1000", "--speed-time", "60",
                "--retry", "8", "--retry-delay", "10", "-C", "-", "-o", dest, url]
+        if attempt == 2:
+            # some servers break off HTTP/2 downloads part-way ("stream was not closed cleanly", seen with
+            # download.openzim.org): the second try uses plain HTTP/1.1
+            cmd[2:2] = ["--http1.1"]
         if PROXY:  # same proxy as everything else; socks5h: the proxy looks up names
             cmd[2:2] = ["--proxy", _proxy_url()]
         p = subprocess.Popen(cmd)
