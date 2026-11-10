@@ -1,0 +1,8 @@
+# Everything in the repository goes into the image ("Check for updates" compares it with GitHub file by file);
+# only what isn't part of it stays out.
+.git
+**/__pycache__
+ZIMaker
+zims
+watch
+browser.txt

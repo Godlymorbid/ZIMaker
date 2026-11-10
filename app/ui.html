@@ -83,6 +83,8 @@ body.dragging #drop{display:flex}
 #updating{position:fixed;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;z-index:20;
   background:var(--bg);text-align:center;padding:20px}
 .hdr-btns{display:flex;gap:8px;flex-shrink:0}
+/* in a Docker container there is no desktop: no window of its own, no file manager, nothing to quit */
+body.docker .nodocker,body.docker #quit,body.docker button.libopen,body.docker button.open{display:none!important}
 </style>
 </head>
 <body>
@@ -111,6 +113,7 @@ body.dragging #drop{display:flex}
     <button class="swatch" data-c="#c2410c" title="Orange" aria-label="Orange" style="background:#c2410c"></button>
     <label class="hint" style="display:inline-flex;gap:6px;align-items:center">Custom <input type="color" id="s-accent" aria-label="Custom accent color"></label>
   </div>
+  <div class="nodocker">
   <div style="margin-top:12px"><b>Open ZIMaker in</b></div>
   <select id="s-browser" aria-label="Browser for ZIMaker's window">
     <option value="auto">Automatic (Edge on Windows; Chrome, Chromium, Edge or Brave on Linux)</option>
@@ -121,11 +124,13 @@ body.dragging #drop{display:flex}
     <option value="default">My default browser</option>
   </select>
   <div class="hint">Used the next time you open ZIMaker. Edge, Chrome and Brave give it a window of its own; Firefox and the default browser open it in an ordinary window. If the browser isn't installed, ZIMaker opens in Edge (or the default browser).</div>
+  </div>
 
   <h3>Notifications</h3>
   <label class="opt"><input type="checkbox" id="s-notify"> Tell me when a job finishes
     <small>A desktop notification, so you can work in other windows meanwhile (the browser asks once whether ZIMaker may show them). In private mode it doesn't name the book.</small></label>
 
+  <div class="nodocker">
   <h3>When the window is closed</h3>
   <div class="row" style="margin-top:4px">Stop ZIMaker
     <select id="s-stopafter" aria-label="When to stop ZIMaker after its window is closed">
@@ -137,6 +142,7 @@ body.dragging #drop{display:flex}
       <option value="0">never (keep running)</option>
     </select></div>
   <div class="hint">A conversion that is running or waiting always finishes first. While ZIMaker keeps running, it opens instantly and the watched folder keeps working; <b>Quit</b> stops it straight away.</div>
+  </div>
 
   <h3>Updates</h3>
   <label class="opt"><input type="checkbox" id="s-updates"> Check for new versions when ZIMaker opens</label>
@@ -209,6 +215,13 @@ body.dragging #drop{display:flex}
     text file named <code>.wslconfig</code> containing the two lines <code>[wsl2]</code> and <code>networkingMode=mirrored</code>,
     then run <code>wsl --shutdown</code> in PowerShell (this stops all Linux programs in WSL) and open ZIMaker again.
     Or run the proxy inside WSL instead: Tor's service (<code>sudo apt install tor</code>) listens on 127.0.0.1:9050.
+  </div>
+  <div id="p-dockerhint" class="hint" style="display:none;margin-top:6px">
+    ZIMaker is running in a Docker container, where 127.0.0.1 is the container itself, not your computer. For a program
+    running on your computer (Tor Browser, Psiphon, an I2P router), use the address <code>host.docker.internal</code>
+    instead, and set that program to accept connections from Docker, not only from 127.0.0.1. Hyphanet and your own IPFS
+    program are only read at 127.0.0.1: for those, run the container on the computer's own network (Linux only; see
+    “Docker” in the README).
   </div>
 
   <div style="margin-top:14px"><b>I2P sites</b></div>
@@ -641,7 +654,8 @@ async function loadTools() {
   const missing = t.tools.some(x => !x.installed);
   $("#toolcmd").innerHTML = !missing ? '<span class="good">Everything is installed.</span>'
     : `<code id="cmdtext">${esc(t.command)}</code><button id="copycmd">Copy</button>`
-      + `<span class="hint" style="flex-basis:100%">${t.windows ? "Paste it into Windows PowerShell and press Enter (it asks Windows for permission). Takes a few minutes; then reopen Settings."
+      + `<span class="hint" style="flex-basis:100%">${t.docker ? "This Docker image was built without it. To add it, run this in the folder with ZIMaker's docker-compose.yml."
+                                                             : t.windows ? "Paste it into Windows PowerShell and press Enter (it asks Windows for permission). Takes a few minutes; then reopen Settings."
                                                              : "Run it in a terminal (it asks for your password). Then reopen Settings."}</span>`;
   if (missing) $("#copycmd").onclick = () => navigator.clipboard.writeText(t.command).then(() => { $("#copycmd").textContent = "Copied"; });
 }
@@ -661,7 +675,7 @@ $("#p-tor").onclick = () => { showProxy({type: "socks5", host: "127.0.0.1", port
 $("#p-torsvc").onclick = () => { showProxy({type: "socks5", host: "127.0.0.1", port: 9050, user: "", password: ""}); $("#p-testmsg").textContent = ""; };
 $("#p-test").onclick = async () => {
   const p = readProxy();
-  $("#p-wslhint").style.display = "none";
+  $("#p-wslhint").style.display = $("#p-dockerhint").style.display = "none";
   $("#p-testmsg").textContent = p.type === "off" ? "Testing a direct connection…" : "Testing (through Tor this can take a while)…";
   $("#p-test").disabled = true;
   const r = await api("/api/proxy/test", {method: "POST", body: JSON.stringify({proxy: p})}).catch(e => ({error: e.message}));
@@ -673,6 +687,7 @@ $("#p-test").onclick = async () => {
   } else {
     $("#p-testmsg").innerHTML = `<span class="err">Not working: ${esc(r.error || "unknown error")}</span>`;
     if (r.wsl_hint) $("#p-wslhint").style.display = "block";
+    if (r.docker_hint) $("#p-dockerhint").style.display = "block";
   }
 };
 // I2P router and Hyphanet node
@@ -710,13 +725,14 @@ $("#ipfs-test").onclick = () => {
            p.on ? "Your IPFS program's gateway answers." : `The public gateway ${esc(p.gateway)} answers (through the saved proxy, if any).`);
 };
 async function testNode(kind, node, msg, button, waiting, good) {
-  $("#p-wslhint").style.display = "none";
+  $("#p-wslhint").style.display = $("#p-dockerhint").style.display = "none";
   $(msg).textContent = waiting; $(button).disabled = true;
   const r = await api(`/api/${kind}/test`, {method: "POST", body: JSON.stringify({node})}).catch(e => ({error: e.message}));
   $(button).disabled = false;
   $(msg).innerHTML = r.ok ? `<span class="good">Working.</span> ${r.note ? "But " + esc(r.note) + "." : good} · ${r.seconds} s`
                           : `<span class="err">Not working: ${esc(r.error || "unknown error")}</span>`;
   if (r.wsl_hint) $("#p-wslhint").style.display = "block";
+  if (r.docker_hint) $("#p-dockerhint").style.display = "block";
 }
 $("#i2p-test").onclick = () => testNode("i2p", readI2p(), "#i2p-testmsg", "#i2p-test",
   "Testing (fetching an I2P site, this can take a minute)…", "The router reached an I2P site.");
@@ -827,7 +843,7 @@ $("#opensettings").onclick = () => {
   showDraftProfile();
   $("#settingsmsg").textContent = "";
   $("#s-updmsg").textContent = "";
-  $("#p-testmsg").textContent = ""; $("#p-wslhint").style.display = "none"; $("#clearmsg").textContent = "";
+  $("#p-testmsg").textContent = ""; $("#p-wslhint").style.display = $("#p-dockerhint").style.display = "none"; $("#clearmsg").textContent = "";
   $("#settings").style.display = "block";
 };
 document.querySelectorAll("input[name=theme]").forEach(r => r.onchange = () => { draft.theme = r.value; setTheme(r.value); });
@@ -987,6 +1003,8 @@ function askToNotify() {  // asked once, when you first start a job (a browser o
 
 // ---- updates from GitHub
 let updateDismissed = false, updating = false, checkedOnce = false;
+const DOCKER_UPDATE = "In Docker, ZIMaker is updated by building a new image. In the folder with its docker-compose.yml, run: "
+  + "<code>git pull</code>, then <code>docker compose up -d --build</code>. Your settings, jobs and ZIM files are kept.";
 function showUpdate(html, autoHide) {
   $("#update").innerHTML = html; $("#update").style.display = html ? "block" : "none";
   if (autoHide) setTimeout(() => { if ($("#update").innerHTML === html) showUpdate(""); }, 6000);
@@ -995,7 +1013,11 @@ async function checkUpdate(force) {
   if (force) showUpdate('<span class="hint">Checking for updates…</span>');
   let u;
   try { u = await api("/api/update" + (force ? "?force=1" : "")); } catch (e) { u = {error: e.message}; }
-  if (u.available && (force || !updateDismissed)) {
+  if (u.available && u.docker && (force || !updateDismissed)) {
+    showUpdate(`<b>A new version of ZIMaker is available.</b> <span class="hint">Updated ${esc(u.date)}: ${esc(u.message)}</span>
+      <div class="hint" style="margin-top:6px">${DOCKER_UPDATE}</div><div class="row"><button id="later">Later</button></div>`);
+    $("#later").onclick = () => { updateDismissed = true; showUpdate(""); };
+  } else if (u.available && (force || !updateDismissed)) {
     showUpdate(`<b>A new version of ZIMaker is available.</b> <span class="hint">Updated ${esc(u.date)}: ${esc(u.message)}</span>
       <div class="row"><button class="primary" id="doupdate">Update now</button><button id="later">Later</button></div>`);
     $("#doupdate").onclick = doUpdate;
@@ -1011,6 +1033,7 @@ $("#s-checknow").onclick = async () => {
   try { u = await api("/api/update?force=1"); } catch (e) { u = {error: e.message}; }
   if (u.error) { $("#s-updmsg").innerHTML = `<span class="err">${esc(u.error)}</span>`; return; }
   if (!u.available) { $("#s-updmsg").innerHTML = '<span class="good">You have the latest version of ZIMaker.</span>'; return; }
+  if (u.docker) { $("#s-updmsg").innerHTML = `<b>A new version is available.</b> Updated ${esc(u.date)}: ${esc(u.message)}. ${DOCKER_UPDATE}`; return; }
   $("#s-updmsg").innerHTML = `<b>A new version is available.</b> Updated ${esc(u.date)}: ${esc(u.message)}
     <button class="primary" id="s-doupdate" style="margin-left:8px">Update now</button>`;
   $("#s-doupdate").onclick = () => { $("#settings").style.display = "none"; setTheme(settings.theme); doUpdate(); };
@@ -1062,6 +1085,12 @@ async function poll() {
       : `<b>Getting ready…</b> <span class="hint">${esc(st.message || "")}</span><div class="bar indef"><div></div></div>`);
     if (!$("#outdir").value && s.default_output) $("#outdir").value = s.default_output;
     if (s.windows === false) $("#paths").placeholder = "/home/you/Downloads/book.pdf  (separate several with ;)";
+    if (s.docker && !document.body.classList.contains("docker")) {
+      // paths are the container's: only folders mounted into it (docker-compose.yml) can be read or written
+      document.body.classList.add("docker");
+      $("#paths").placeholder = "/input/book.pdf  (a folder mounted into the container; separate several with ;)";
+      $("#s-watchdir").placeholder = "/watch";
+    }
     if (setHtml($("#jobs"), s.jobs.length ? s.jobs.map(jobHtml).join("") : '<p class="hint">Nothing yet.</p>')) {
       const jobs = $("#jobs");
       jobs.querySelectorAll(".rerun").forEach(b => b.onclick = async () => {

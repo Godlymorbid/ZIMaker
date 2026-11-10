@@ -124,6 +124,8 @@ def save(s):
     os.replace(tmp, PATH)
     C.net_init(s["proxy"], s["i2p"], s["hyphanet"], s["ipfs"])   # this process uses them straight away
     # the Windows launcher (a VBScript) can't read this file inside Linux: give it the browser choice next to itself
+    if C.DOCKER:   # no launcher in a container
+        return s
     try:
         with open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                                "browser.txt"), "w", encoding="ascii") as f:

@@ -1,0 +1,45 @@
+# ZIMaker in Docker. In this folder:
+#
+#   docker compose up -d --build      start it (the first build downloads about 1 GB and takes a few minutes)
+#   open http://localhost:8765        ZIMaker's window, in any browser
+#   docker compose stop               stop it
+#   git pull && docker compose up -d --build     update it (settings, jobs and ZIM files are kept)
+#
+# ZIMaker only sees the folders listed under "volumes" below. In its window, paths are the container's:
+# ZIM files are saved to /output, which is the "zims" folder next to this file.
+services:
+  zimaker:
+    build:
+      context: .
+      # args:
+      #   LIBREOFFICE: "0"          # leave LibreOffice out (about 400 MB smaller; no DOC/XLS/PPT files)
+    image: zimaker
+    container_name: zimaker
+    restart: unless-stopped
+    ports:
+      # This computer only. ZIMaker has no password: anyone who can open it can read every folder mounted below.
+      # To use it from other computers on a network you trust, change this to "8765:8765" and name the address
+      # they will type under ZIMAKER_HOSTS.
+      - "127.0.0.1:8765:8765"
+    environment:
+      PUID: "1000"                  # the user and group that own the ZIM files it makes (on Linux: id -u, id -g)
+      PGID: "1000"
+      # ZIMAKER_HOSTS: "nas.lan:8765,192.168.1.20:8765"   # other names or ports its window is opened under
+    volumes:
+      - zimaker-data:/data          # settings, the Jobs list, uploaded files
+      - ./zims:/output              # where ZIM files are saved
+      # - ./watch:/watch            # a watched folder (Settings -> Watched folder: /watch)
+      # - /path/to/your/books:/input:ro   # big files to convert by path (/input/book.pdf) instead of uploading
+    extra_hosts:
+      # lets a proxy on this computer (Tor Browser, Psiphon, an I2P router) be reached as host.docker.internal
+      - "host.docker.internal:host-gateway"
+
+    # Linux only: share the computer's own network instead, so 127.0.0.1 in ZIMaker's settings is this computer
+    # (needed for Hyphanet and for your own IPFS program; Tor and I2P then work at 127.0.0.1 too). Remove
+    # "ports" and "extra_hosts" above, and keep ZIMAKER_BIND so that only this computer can open it.
+    # network_mode: host
+    # environment:
+    #   ZIMAKER_BIND: "127.0.0.1"
+
+volumes:
+  zimaker-data:

@@ -21,15 +21,20 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-HOME = os.path.expanduser("~/.zimaker")
+# In a Docker container (ZIMAKER_DOCKER=1, set by the Dockerfile) there is no desktop: no window to open, no file
+# manager, nothing to install into. Settings and jobs live in a volume (ZIMAKER_HOME), and the libraries are part of
+# the image (ZIMAKER_RUNTIME), so a new image brings new libraries and the volume keeps only the user's own things.
+DOCKER = os.environ.get("ZIMAKER_DOCKER") == "1"
+HOME = os.environ.get("ZIMAKER_HOME") or os.path.expanduser("~/.zimaker")
 _OLD_HOME = os.path.expanduser("~/.zim-creator")  # before the rename to ZIMaker: keep libraries and job history
-if not os.path.exists(HOME) and os.path.isdir(_OLD_HOME):
+if not os.path.exists(HOME) and os.path.isdir(_OLD_HOME) and not os.environ.get("ZIMAKER_HOME"):
     try:
         os.rename(_OLD_HOME, HOME)
     except OSError:
         pass
-LIB = os.path.join(HOME, "lib")            # Python wheels unpacked here (libzim, Pillow, numpy, PyMuPDF)
-TOOLS = os.path.join(HOME, "zim-tools")    # openZIM zim-tools (zimcheck)
+RUNTIME = os.environ.get("ZIMAKER_RUNTIME") or HOME   # where the libraries and helper programs are unpacked
+LIB = os.path.join(RUNTIME, "lib")         # Python wheels unpacked here (libzim, Pillow, numpy, PyMuPDF)
+TOOLS = os.path.join(RUNTIME, "zim-tools")  # openZIM zim-tools (zimcheck)
 JOBS = os.path.join(HOME, "jobs")
 UPLOADS = os.path.join(HOME, "uploads")
 UA = {"User-Agent": "zimaker/1.0 (personal archiving tool)"}
@@ -1029,7 +1034,8 @@ def lang3(v):
 # On Windows the converter runs inside WSL and shows Windows paths; on Linux it runs natively.
 # ZIMAKER_NATIVE=1 forces the native-Linux behaviour (for testing inside WSL).
 
-IS_WSL = (os.environ.get("ZIMAKER_NATIVE") != "1"
+# (Docker Desktop on Windows runs containers on WSL's kernel, so a container would look like WSL: it never is.)
+IS_WSL = (os.environ.get("ZIMAKER_NATIVE") != "1" and not DOCKER
           and (os.path.exists("/proc/sys/fs/binfmt_misc/WSLInterop") or "microsoft" in os.uname().release.lower()))
 
 
@@ -1065,6 +1071,8 @@ def to_win(p):
 
 
 def default_output():
+    if DOCKER:   # the folder the container's /output volume is mounted on
+        return os.environ.get("ZIMAKER_OUTPUT") or "/output"
     if IS_WSL:
         docs = windows_folders()[1] or (windows_profile() + "\\Documents" if windows_profile() else "")
         if docs:
@@ -1075,6 +1083,8 @@ def default_output():
 
 def open_folder(p):
     """Show a folder (or the folder holding a file) in the system file manager."""
+    if DOCKER:   # no desktop in a container (the window hides its "Open folder" buttons)
+        return
     if IS_WSL:  # paths shown to the user are Windows paths here
         target = ntpath.dirname(p) if p.lower().endswith(".zim") else p
         subprocess.Popen(["explorer.exe", target], cwd="/mnt/c")

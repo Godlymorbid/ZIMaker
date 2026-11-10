@@ -1,6 +1,6 @@
 # ZIMaker
 
-Turns websites, archive.org books, ebooks, documents, emails, pictures, audio and video into ZIM files for Kiwix, and opens ZIM files so you can read and search them. It runs on **Windows** and **Linux**.
+Turns websites, archive.org books, ebooks, documents, emails, pictures, audio and video into ZIM files for Kiwix, and opens ZIM files so you can read and search them. It runs on **Windows** and **Linux**, and in **Docker**.
 
 ## About this project
 
@@ -48,12 +48,37 @@ To remove it, run `sh ~/.local/share/zimaker/uninstall.sh`.
 
 Requirements: Python 3.11 or newer (Ubuntu 24.04, Debian 13, Fedora 39 and later include it), on a 64-bit Intel/AMD or ARM PC. If Chrome, Chromium, Edge or Brave is installed, the app opens in its own window; otherwise it opens in your default browser.
 
+### Docker
+
+For a home server or NAS, or to keep ZIMaker and everything it installs inside a container. You need Docker with Docker Compose (Docker Desktop on Windows and macOS includes both).
+
+1. Unzip the downloaded zip, or clone the repository: `git clone https://github.com/Godlymorbid/ZIMaker`
+2. In a terminal, in that folder, run: `docker compose up -d --build`
+3. Open **http://localhost:8765** in any browser.
+
+The first build downloads about 1 GB (the libraries, FFmpeg, 7-Zip and LibreOffice) and takes a few minutes. After that it starts with the computer and keeps running; stop it with `docker compose stop`.
+
+What is different from the desktop versions:
+
+- **Folders.** ZIMaker only sees the folders listed under `volumes` in `docker-compose.yml`, and in its window paths are the container's. ZIM files are saved to `/output`, which is the `zims` folder next to `docker-compose.yml`. The file has ready-made lines to uncomment for a watched folder (`/watch`) and for a folder of big files to convert by path (`/input`). Dragging files onto the window works as usual.
+- **No Quit, no "Open folder", no browser choice.** It has no window of its own and keeps running without one.
+- **Updates.** **Check for updates** tells you when there's a new version. To install it: `git pull`, then `docker compose up -d --build`. Settings, the Jobs list and your ZIM files are kept.
+- **Optional tools** are all part of the image. To leave LibreOffice out (about 400 MB smaller), set `LIBREOFFICE: "0"` under `build: args:` in `docker-compose.yml`.
+- **Who owns the files.** ZIM files belong to user and group 1000. On Linux, if `id -u` shows another number, set `PUID` and `PGID` in `docker-compose.yml`.
+- **A proxy on the same computer** (Tor Browser, Psiphon, an I2P router): inside the container, `127.0.0.1` is the container itself. Use the address `host.docker.internal` in ZIMaker's settings, and set that program to accept connections from Docker, not only from 127.0.0.1. Hyphanet and your own IPFS program are only read at 127.0.0.1: for those, on Linux, use the `network_mode: host` lines at the end of `docker-compose.yml`.
+- **Other computers.** As shipped, only the computer running Docker can open ZIMaker. It has no password, and whoever can open it can read every folder mounted into it. On a network you trust, change the port line to `"8765:8765"` and list the address people will type under `ZIMAKER_HOSTS` (for example `nas.lan:8765`); ZIMaker refuses requests under any other name.
+
+Without Compose: `docker build -t zimaker .`, then `docker run -d --name zimaker -p 127.0.0.1:8765:8765 -v zimaker-data:/data -v "$PWD/zims:/output" zimaker`.
+
+To remove it: `docker compose down --rmi local -v` (the `zims` folder stays).
+
 ## Start it
 
 - **Windows:** double-click the **ZIMaker** icon on the desktop or in the Start menu.
   - To recreate the desktop icon, run `Create desktop shortcut.cmd`.
   - You can also double-click `ZIMaker.vbs` in the install folder.
 - **Linux:** open **ZIMaker** from your applications menu, or run `zimaker`.
+- **Docker:** open http://localhost:8765 in a browser (it is already running; see **Docker** above).
 
 **Stopping:** close the window, and ZIMaker stops by itself about 2½ minutes later. You can change that in **⚙ Settings → When the window is closed**: 10 minutes, 30 minutes, 1 hour, 4 hours, or never (keep running, handy with a watched folder). If a conversion is still running or waiting, it finishes first and then stops. The **Quit** button stops it straight away; it asks first if a conversion is running.
 
@@ -90,6 +115,7 @@ If an update doesn't finish, close the window and open ZIMaker again. The log is
 
 - **Windows:** `Start ZIMaker (with console).cmd` runs the same app with a visible console that shows any errors.
 - **Linux:** errors are logged to `~/.zimaker/server.log`.
+- **Docker:** `docker compose logs zimaker` shows them. If saving fails with "permission denied", see **Who owns the files** under **Docker**.
 
 ## Use it
 
@@ -213,6 +239,7 @@ Install them once (about 400 MB in all):
 
 - **Windows**, in PowerShell: `wsl -u root -- sh -c "apt-get update && apt-get install -y ffmpeg 7zip unar libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui libreoffice-draw-nogui"`
 - **Linux** (Debian/Ubuntu): `sudo apt install ffmpeg 7zip unar libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui libreoffice-draw-nogui`
+- **Docker:** nothing to do; they are part of the image.
 
 **⚙ Settings → Optional tools** shows which are installed and the exact command for your system. If you add a file that needs a missing tool, the job says which one and how to install it.
 
@@ -304,7 +331,7 @@ An encrypted container doesn't help while it's open, and some places force peopl
 - **Picture detection** looks for ink on the page that isn't under any word. It catches illustrations, maps, plates and most line drawings. Covers and endpapers usually count as pictures. A very faint or tiny diagram can be missed.
 - **Big scan sets take a while.** A 1,000-page volume downloads about 1–3.5 GB of scans, which are deleted once the ZIM is built.
 - **Broken ebooks:** if an ebook refers to files it doesn't contain (common in real-world ebooks), those references are repaired or removed, so the ZIM has no broken links.
-- **Where its files live:** libraries, job logs and temporary files are in `~/.zimaker` (inside WSL on Windows). To clear old job logs, use **Remove from list**, or delete `~/.zimaker/jobs`.
+- **Where its files live:** libraries, job logs and temporary files are in `~/.zimaker` (inside WSL on Windows; in Docker, settings and job logs are in the `zimaker-data` volume). To clear old job logs, use **Remove from list**, or delete `~/.zimaker/jobs`.
 
 ## Files
 
@@ -314,7 +341,8 @@ An encrypted container doesn't help while it's open, and some places force peopl
   - `Create desktop shortcut.cmd`: (re)creates the desktop icon.
   - `Start ZIMaker (with console).cmd`: the launcher with a visible console, for troubleshooting.
 - **Linux:** `install.sh`, `uninstall.sh`, and `zimaker.sh` (the launcher).
-- **Both:**
+- **Docker:** `Dockerfile`, `docker-compose.yml`, `docker-entrypoint.sh` (starts ZIMaker as the right user) and `.dockerignore`.
+- **All:**
   - `app/setup.py`: first-run setup.
   - `app/server.py`: the local web app.
   - `app/ui.html`: the page you see.

@@ -3,3 +3,5 @@ __pycache__/
 *.zim
 distro.txt
 browser.txt
+zims/
+watch/

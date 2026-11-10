@@ -19,7 +19,7 @@ PACKAGES = {"libzim": "libzim", "PIL": "pillow", "numpy": "numpy", "pymupdf": "p
 # Versions tested with ZIMaker. libzim 4.0 changed its API the day it came out (Oct 2026) and broke every build on
 # fresh installs, so new installs get a tested version instead of whatever is newest. (Code works with 3.13 and 4.0.)
 PINS = {"libzim": "4.0.0"}
-PANDOC = os.path.join(C.HOME, "pandoc")  # Pandoc converts DOCX, ODT, RTF, Markdown, PPTX, XLSX, ... to EPUB
+PANDOC = os.path.join(C.RUNTIME, "pandoc")  # Pandoc converts DOCX, ODT, RTF, Markdown, PPTX, XLSX, ... to EPUB
 
 
 # the PyPI project for a module a library reports missing, where the names differ

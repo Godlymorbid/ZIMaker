@@ -70,11 +70,16 @@ def check(force=False):
     changed = [p for p, sha in remote["files"].items()
                if not os.path.isfile(os.path.join(DEST, p)) or _blob_sha(os.path.join(DEST, p)) != sha]
     return {"available": bool(changed), "changed": changed[:20], "count": len(changed),
-            "date": remote["date"], "message": remote["message"], "repo": cfg["repo"]}
+            "date": remote["date"], "message": remote["message"], "repo": cfg["repo"], "docker": C.DOCKER}
+
+
+DOCKER_UPDATE = "git pull && docker compose up -d --build"   # run in the folder with docker-compose.yml
 
 
 def apply():
     """Download the latest code and start the installer in the background. Returns immediately."""
+    if C.DOCKER:   # a container is replaced, not changed from inside: the new code comes with a new image
+        raise RuntimeError(f"in Docker, ZIMaker is updated by building a new image: {DOCKER_UPDATE}")
     cfg = config()
     url = f"https://github.com/{cfg['repo']}/archive/refs/heads/{cfg['branch']}.zip"
     # Windows: stage next to the install (a Windows folder the installer can read); Linux: in ~/.zimaker

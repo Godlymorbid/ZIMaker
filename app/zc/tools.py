@@ -36,6 +36,8 @@ def find(name, binary=None):
 def install_command(names=None):
     names = names or list(TOOLS)
     pkgs = " ".join(p for n in names for p in TOOLS[n]["packages"])
+    if C.DOCKER:  # they are part of the image (LibreOffice can be left out when building it): build it with everything
+        return "docker compose build --build-arg LIBREOFFICE=1 && docker compose up -d"
     if C.IS_WSL:  # typed into Windows PowerShell; runs the package manager inside ZIMaker's WSL distribution as root
         distro = os.environ.get("WSL_DISTRO_NAME", "")
         d = f"-d {distro} " if distro and " " not in distro else ""
@@ -47,7 +49,7 @@ def status():
     return {"tools": [{"id": n, "label": t["label"], "for": t["for"], "installed": bool(find(n))}
                       for n, t in TOOLS.items()],
             "command": install_command(),
-            "windows": C.IS_WSL,
+            "windows": C.IS_WSL, "docker": C.DOCKER,
             "debian_like": os.path.exists("/usr/bin/apt-get")}
 
 
@@ -57,6 +59,9 @@ def need(name, what):
     if p:
         return p
     t = TOOLS[name]
+    if C.DOCKER:
+        raise RuntimeError(f"{what} needs {t['label']}, which this Docker image was built without. Build it again "
+                           f"with everything, in the folder with ZIMaker's docker-compose.yml:  {install_command([name])}")
     where = "in Windows PowerShell" if C.IS_WSL else "in a terminal"
     raise RuntimeError(f"{what} needs {t['label']}, which isn't installed. Install it once {where}:  "
                        f"{install_command([name])}   (also shown in ZIMaker's Settings → Optional tools)")

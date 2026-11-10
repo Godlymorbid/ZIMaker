@@ -23,6 +23,14 @@ sys.path.insert(0, APP)
 from zc import common as C  # noqa: E402
 
 PORT = 8765
+# On a desktop only this computer can reach ZIMaker (127.0.0.1). In a Docker container the window is a browser
+# outside the container, so it listens on the container's network instead, and Docker's port mapping decides who
+# can reach it (docker-compose.yml publishes it to this computer only).
+BIND = (os.environ.get("ZIMAKER_BIND") or "0.0.0.0") if C.DOCKER else "127.0.0.1"
+# Other names the window may be opened under in Docker, beyond localhost:8765 (ZIMAKER_HOSTS=nas.lan:8765,…):
+# another published port, or another computer's name for this one.
+EXTRA_HOSTS = {h.strip().lower() for h in (os.environ.get("ZIMAKER_HOSTS") or "").split(",") if h.strip()} \
+    if C.DOCKER else set()
 SETUP = {"state": "starting", "message": "", "zimcheck": False}
 PROCS = {}
 QUEUE = []
@@ -157,6 +165,8 @@ def proxy_test(p):
         if C.IS_WSL and p["type"] != "off" and p["host"].strip("[]") in ("127.0.0.1", "localhost", "::1") and \
                 ("refused" in why.lower() or "timed out" in why.lower()):
             out["wsl_hint"] = True  # a proxy on Windows' own 127.0.0.1 can't be reached from WSL's default network
+        if C.DOCKER and p["type"] != "off" and p["host"].strip("[]") in ("127.0.0.1", "localhost", "::1"):
+            out["docker_hint"] = True  # 127.0.0.1 is the container itself, not the computer it runs on
         return out
 
 
@@ -209,6 +219,8 @@ def node_test(kind, p):
         if C.IS_WSL and (kind != "ipfs" or p["on"]) and gw["host"].strip("[]") in ("127.0.0.1", "localhost", "::1") and \
                 ("refused" in why.lower() or "timed out" in why.lower()):
             out["wsl_hint"] = True
+        if C.DOCKER and (kind != "ipfs" or p["on"]) and gw["host"].strip("[]") in ("127.0.0.1", "localhost", "::1"):
+            out["docker_hint"] = True
         return out
 
 
@@ -624,8 +636,10 @@ class H(BaseHTTPRequestHandler):
         port = self.server.server_address[1]
         host = (self.headers.get("Host") or "").lower()
         origin = self.headers.get("Origin")
-        ok_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
-        if host not in ok_hosts or (origin and origin.lower() not in {"http://" + h for h in ok_hosts}) or \
+        ok_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"} | EXTRA_HOSTS
+        # (a name added for Docker may be served over https by a reverse proxy in front)
+        ok_origins = {"http://" + h for h in ok_hosts} | {"https://" + h for h in EXTRA_HOSTS}
+        if host not in ok_hosts or (origin and origin.lower() not in ok_origins) or \
                 (changes and self.headers.get("X-ZIMaker") != "1"):
             self._json({"error": "Not allowed: this request didn't come from ZIMaker's own window."}, 403)
             return False
@@ -683,7 +697,7 @@ class H(BaseHTTPRequestHandler):
             for gone in set(_SUMMARY) - set(ids):
                 _SUMMARY.pop(gone, None)
             self._json({"setup": SETUP, "jobs": jobs, "default_output": DEFAULTS.get("output", ""),
-                        "windows": C.IS_WSL, "watch": {"folder": WATCH["folder"], "error": WATCH["error"]},
+                        "windows": C.IS_WSL, "docker": C.DOCKER, "watch": {"folder": WATCH["folder"], "error": WATCH["error"]},
                         "downloads": DEFAULTS.get("downloads", "")})
         else:
             self._json({"error": "not found"}, 404)
@@ -888,6 +902,8 @@ class H(BaseHTTPRequestHandler):
             except Exception as e:  # noqa: BLE001
                 return self._json({"error": f"The update couldn't be downloaded: {e}"}, 500)
         if u.path == "/api/quit":
+            if C.DOCKER:   # a container is stopped from outside (and would be started again by its restart policy)
+                return self._json({"error": "In Docker, stop ZIMaker with: docker compose stop"}, 400)
             if busy() and not self._body().get("force"):
                 return self._json({"busy": True})
             with LOCK:
@@ -921,24 +937,30 @@ def main():
     os.makedirs(C.JOBS, exist_ok=True)
     os.makedirs(C.UPLOADS, exist_ok=True)
     try:
-        srv = ThreadingHTTPServer(("127.0.0.1", PORT), H)
+        srv = ThreadingHTTPServer((BIND, PORT), H)
     except OSError:
         print(f"ZIMaker already seems to be running: open http://127.0.0.1:{PORT}")
         return
     SERVER["srv"] = srv
     DEFAULTS["output"] = C.default_output()
     # suggested folder to watch: the user's Downloads
-    DEFAULTS["downloads"] = (C.windows_profile() + "\\Downloads") if C.IS_WSL and C.windows_profile() \
-        else os.path.expanduser("~/Downloads")
+    DEFAULTS["downloads"] = "/watch" if C.DOCKER else (C.windows_profile() + "\\Downloads") \
+        if C.IS_WSL and C.windows_profile() else os.path.expanduser("~/Downloads")
+    if C.DOCKER:   # say so now, not when the first job fails: a mounted folder the container's user can't write to
+        for d in (C.HOME, DEFAULTS["output"]):
+            if not os.access(d, os.W_OK):
+                print(f"WARNING: ZIMaker can't write to {d}. Check the owner of the folder mounted there "
+                      "(see PUID/PGID in docker-compose.yml).", flush=True)
     threading.Thread(target=setup_thread, daemon=True).start()
     threading.Thread(target=scheduler, daemon=True).start()
-    threading.Thread(target=watchdog, daemon=True).start()
+    if not C.DOCKER:   # a container keeps running without a window: it is stopped from outside
+        threading.Thread(target=watchdog, daemon=True).start()
     threading.Thread(target=watcher, daemon=True).start()
     if private():  # private mode: also catches anything left behind if ZIMaker didn't stop normally last time
         clear_history()
     # stopped from outside (WSL shutting down, the system, Ctrl+C): still clean up below
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=srv.shutdown, daemon=True).start())
-    print(f"ZIMaker is running at http://127.0.0.1:{PORT}", flush=True)
+    print(f"ZIMaker is running at http://127.0.0.1:{PORT}" + (" (inside its container)" if C.DOCKER else ""), flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
