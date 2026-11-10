@@ -257,6 +257,7 @@ class Site:
         self.slowed = False  # the site asked us to slow down at least once
         self.dead = {}       # other hosts (CDNs...) that didn't answer: host -> failures in a row
         self._gate, self._next = threading.Lock(), 0.0   # spaces out requests to the site when it asks for a delay
+        self.keep = C.KeepAlive()   # this crawl's open connections, used again instead of one per file
         self.single = scope == "page"  # just the linked page (plus its pictures and styles)
         self.robots = urllib.robotparser.RobotFileParser()   # only for its Crawl-delay
         try:
@@ -275,7 +276,9 @@ class Site:
         req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*", "Accept-Encoding": "gzip"})
         # Hyphanet: the gateway answers once it has fetched the whole file from the network, which can take minutes
         timeout = (300 if self.hyphanet else (60 if small else 120)) if self.dark else (20 if small else 45)
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with self.keep.use():   # connections stay open between this crawl's requests (see C.KeepAlive)
+            resp = urllib.request.urlopen(req, timeout=timeout)
+        with resp:
             # unpacked as it is read, so the size limits below count the real size
             r = (gzip.GzipFile(fileobj=resp) if (resp.headers.get("Content-Encoding") or "").strip().lower()
                  in ("gzip", "x-gzip") else resp)
@@ -522,6 +525,15 @@ class Site:
             return data.decode("utf-8", "replace")
 
     def crawl(self):
+        try:
+            n = self._crawl()
+            if self.keep.reused:
+                self.log(f"{self.keep.opened + self.keep.reused} requests over {self.keep.opened} connections")
+            return n
+        finally:
+            self.keep.close()
+
+    def _crawl(self):
         log = self.log
         pages, queued, assets = deque([self.start]), {self.start}, set()
         n_pages = 0
@@ -639,6 +651,8 @@ def peek(url):
         final, mime, charset, data = s._get(s.start, small=True)
     except Exception as e:  # noqa: BLE001
         raise RuntimeError(explain(e)) from e
+    finally:
+        s.keep.close()
     text = Site._decode(data, charset)
     t = re.search(r"<title[^>]*>(.*?)</title>", text, re.I | re.S)
     return {"title": " ".join(html.unescape(t.group(1)).split()) if t else s.start,

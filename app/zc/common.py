@@ -7,12 +7,14 @@ import json
 import ntpath
 import os
 import re
+import select
 import shutil
 import socket
 import ssl
 import struct
 import subprocess
 import sys
+import threading
 import time
 import unicodedata
 import urllib.error
@@ -147,6 +149,182 @@ def _socks_connect(p, host, port, timeout):
         raise
 
 
+# ---------------------------------------------------------------- connections kept open (website crawls)
+# A crawl asks one site for hundreds of files. Opening a connection for each costs a TCP and TLS handshake every
+# time (through Tor, a new stream as well), so a crawl keeps its connections open and uses them again.
+# Which way a request goes is still decided by the handlers below, exactly as without this: a kept connection is
+# only looked for at the point where that handler would otherwise open a new one, and only among connections the
+# same handler opened to the same place (same proxy, same tunnel). So nothing can go around the proxy, and a
+# connection made for one network (Tor, I2P, a local gateway) is never used for another.
+_KEEP = threading.local()   # .pool: the KeepAlive this thread's requests may use (None: a new connection each time)
+
+
+def _has_data(sock):
+    """Something to read on a connection nobody is using: the server closed it (or sent something unasked)."""
+    try:
+        if getattr(sock, "pending", None) and sock.pending():
+            return True
+        return bool(select.select([sock], [], [], 0)[0])
+    except (OSError, ValueError):
+        return True
+
+
+class KeepAlive:
+    """The idle connections of one crawl. close() when the crawl is over."""
+
+    def __init__(self, per_place=6, most=32, idle=30):
+        self.per_place, self.most, self.max_idle = per_place, most, idle
+        self.lock = threading.Lock()
+        self.idle = {}        # (handler, host, tunnel host) -> [(connection, when it was put back)]
+        self.closed = False
+        self.opened = self.reused = 0
+
+    def use(self):
+        """with pool.use(): this thread's requests use the pool's connections (each thread says so itself)."""
+        return _Using(self)
+
+    def take(self, key):
+        while True:
+            with self.lock:
+                waiting = self.idle.get(key)
+                if not waiting:
+                    return None
+                h, t = waiting.pop()
+            if h.sock is not None and time.monotonic() - t < self.max_idle and not _has_data(h.sock):
+                return h
+            h.close()
+
+    def give(self, key, h):
+        drop = [h]
+        with self.lock:
+            if not self.closed and h.sock is not None and len(self.idle.get(key, ())) < self.per_place:
+                drop = []
+                now = time.monotonic()
+                if sum(map(len, self.idle.values())) >= self.most:   # too many open: the stale ones, else the oldest
+                    for k in list(self.idle):
+                        keep = [(c, t) for c, t in self.idle[k] if now - t < self.max_idle]
+                        drop += [c for c, t in self.idle[k] if now - t >= self.max_idle]
+                        if keep:
+                            self.idle[k] = keep
+                        else:
+                            del self.idle[k]
+                    if sum(map(len, self.idle.values())) >= self.most:
+                        k = min(self.idle, key=lambda k: self.idle[k][0][1])
+                        drop.append(self.idle[k].pop(0)[0])
+                        if not self.idle[k]:
+                            del self.idle[k]
+                self.idle.setdefault(key, []).append((h, now))
+        for c in drop:
+            c.close()
+
+    def close(self):
+        with self.lock:
+            self.closed = True
+            conns = [c for v in self.idle.values() for c, _ in v]
+            self.idle.clear()
+        for c in conns:
+            c.close()
+
+
+class _Using:
+    def __init__(self, pool):
+        self.pool = pool
+
+    def __enter__(self):
+        self.before = getattr(_KEEP, "pool", None)
+        _KEEP.pool = self.pool
+
+    def __exit__(self, *exc):
+        _KEEP.pool = self.before
+
+
+class _KeepResponse(http.client.HTTPResponse):
+    """An answer that hands its connection back for the next request once it has been read to its end.
+    Closed before that (an error page nobody reads, a file that turned out too large): the connection is closed
+    too, since what is left of the answer would be mistaken for the next one."""
+    _keep = None
+    _by_caller = False
+
+    def close(self):
+        self._by_caller = True
+        super().close()
+
+    def _close_conn(self):
+        super()._close_conn()
+        keep, self._keep = self._keep, None
+        if keep:
+            pool, key, h = keep
+            if not self._by_caller and not self.will_close and (self.chunked or self.length == 0):
+                pool.give(key, h)
+            else:
+                h.close()
+
+
+class _Keep:
+    """For urllib's HTTP(S) handlers: where they would open a connection, use one this crawl already has open to
+    the same place, if any. Requests outside a crawl (no pool) are untouched."""
+
+    def do_open(self, http_class, req, **args):
+        pool = getattr(_KEEP, "pool", None)
+        if pool is None or req.data is not None or not req.host:
+            return super().do_open(http_class, req, **args)
+        host = req.host
+        key = (self, host, req._tunnel_host)   # this handler's own connections only: see the note above
+        headers = dict(req.unredirected_hdrs)
+        headers.update({k: v for k, v in req.headers.items() if k not in headers})
+        headers["Connection"] = "keep-alive"
+        headers = {name.title(): val for name, val in headers.items()}
+        tunnel = {}
+        if req._tunnel_host and "Proxy-Authorization" in headers:
+            tunnel["Proxy-Authorization"] = headers.pop("Proxy-Authorization")
+        timed = isinstance(req.timeout, (int, float))
+        h = pool.take(key)
+        while True:
+            reused, sent = h is not None, False
+            try:
+                if reused:
+                    if timed:
+                        h.timeout = req.timeout
+                        h.sock.settimeout(req.timeout)
+                else:
+                    h = http_class(host, timeout=req.timeout, **args)
+                    h.response_class = _KeepResponse
+                    if req._tunnel_host:
+                        h.set_tunnel(req._tunnel_host, headers=tunnel)
+                h.request(req.get_method(), req.selector, None, headers)
+                sent = True
+                r = h.getresponse()
+                break
+            except BaseException as e:
+                if h is not None:
+                    h.close()
+                # a connection that sat idle may have been closed by the server in the meantime: once more, on a
+                # new one (only a request that can safely be asked twice gets here: no data is ever sent)
+                if reused and isinstance(e, (OSError, http.client.HTTPException)) and not isinstance(e, TimeoutError):
+                    h = None
+                    continue
+                if not sent and isinstance(e, OSError):   # couldn't connect or send: reported as urllib does
+                    raise urllib.error.URLError(e) from e
+                raise
+        if reused:
+            pool.reused += 1
+        else:
+            pool.opened += 1
+        if not r.will_close and h.sock is not None:
+            r._keep = (pool, key, h)
+        r.url = req.get_full_url()
+        r.msg = r.reason
+        return r
+
+
+class _KeepHTTP(_Keep, urllib.request.HTTPHandler):
+    pass
+
+
+class _KeepHTTPS(_Keep, urllib.request.HTTPSHandler):
+    pass
+
+
 class _SocksHTTP(http.client.HTTPConnection):
     def __init__(self, *a, proxy, **kw):
         super().__init__(*a, **kw)
@@ -166,7 +344,7 @@ class _SocksHTTPS(http.client.HTTPSConnection):
         self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
 
 
-class _SocksHandler(urllib.request.HTTPHandler):
+class _SocksHandler(_Keep, urllib.request.HTTPHandler):
     def __init__(self, proxy):
         super().__init__()
         self.proxy = proxy
@@ -175,7 +353,7 @@ class _SocksHandler(urllib.request.HTTPHandler):
         return self.do_open(lambda host, **kw: _SocksHTTP(host, proxy=self.proxy, **kw), req)
 
 
-class _SocksHTTPSHandler(urllib.request.HTTPSHandler):
+class _SocksHTTPSHandler(_Keep, urllib.request.HTTPSHandler):
     def __init__(self, proxy):
         super().__init__()
         self.proxy = proxy
@@ -315,6 +493,7 @@ class _Hyphanet(urllib.request.BaseHandler):
 
     def __init__(self, gateway=None):
         self.gateway = gateway
+        self._http = _KeepHTTP()
 
     def http_open(self, req):
         if not is_hyphanet(req.full_url):
@@ -326,7 +505,7 @@ class _Hyphanet(urllib.request.BaseHandler):
             raise urllib.error.URLError(f"this Hyphanet link is for a gateway at {req.host}, but Hyphanet in ⚙ Settings "
                                         f"is set to port {g['port']}")
         req.selector += ("&" if "?" in req.selector else "?") + "max-size=500000000"
-        return urllib.request.HTTPHandler().http_open(req)
+        return self._http.http_open(req)
 
     def https_open(self, req):
         if is_hyphanet(req.full_url):
@@ -504,6 +683,7 @@ class _IPFSLocal(urllib.request.BaseHandler):
 
     def __init__(self, node=None):
         self.node = node
+        self._http = _KeepHTTP()
 
     def http_open(self, req):
         if is_ipfs(req.host or "") != "local":
@@ -514,7 +694,7 @@ class _IPFSLocal(urllib.request.BaseHandler):
         return self.do_open(lambda host, **kw: http.client.HTTPConnection("127.0.0.1", port, **kw), req)
 
     def do_open(self, conn, req):
-        return urllib.request.HTTPHandler().do_open(conn, req)
+        return self._http.do_open(conn, req)
 
     def https_open(self, req):
         if is_ipfs(req.host or "") == "local":
@@ -534,6 +714,7 @@ class _I2P(urllib.request.BaseHandler):
 
     def __init__(self, router=None):
         self.router = router
+        self._http, self._https = _KeepHTTP(), _KeepHTTPS(context=ssl.create_default_context())
 
     def _open(self, req):
         if not is_i2p(req.host or ""):
@@ -543,8 +724,8 @@ class _I2P(urllib.request.BaseHandler):
             raise urllib.error.URLError(I2P_NEEDS_ROUTER)
         req.set_proxy(f"{r['host']}:{r['port']}", "http")   # http: absolute URL to the router; https: CONNECT
         if req.type == "https":
-            return urllib.request.HTTPSHandler(context=ssl.create_default_context()).https_open(req)
-        return urllib.request.HTTPHandler().http_open(req)
+            return self._https.https_open(req)
+        return self._http.http_open(req)
 
     http_open = https_open = _open
 
@@ -584,7 +765,7 @@ def proxy_opener(p, i2p=None, hyphanet=None, ipfs=None):
     ({"host"/"port"}, or None: refused)."""
     i2 = [_I2P(i2p), _Hyphanet(hyphanet), _IPFSLocal(ipfs)]
     if p["type"] == "off":
-        return urllib.request.build_opener(_WebOnly(), *i2, _NoOnion())
+        return urllib.request.build_opener(_KeepHTTP(), _KeepHTTPS(), _WebOnly(), *i2, _NoOnion())
     why = _proxy_problem(p)
     if why:
         return urllib.request.build_opener(_WebOnly(), *i2, _Refuse(why))
@@ -592,8 +773,8 @@ def proxy_opener(p, i2p=None, hyphanet=None, ipfs=None):
         login = (urllib.parse.quote(p["user"], safe="") + ":" + urllib.parse.quote(p["password"], safe="") + "@"
                  if p["user"] else "")
         url = f"http://{login}{p['host']}:{p['port']}"
-        return urllib.request.build_opener(urllib.request.ProxyHandler({"http": url, "https": url}), _WebOnly(),
-                                           *i2, _Refuse(), _NoOnion())
+        return urllib.request.build_opener(urllib.request.ProxyHandler({"http": url, "https": url}), _KeepHTTP(),
+                                           _KeepHTTPS(), _WebOnly(), *i2, _Refuse(), _NoOnion())
     return urllib.request.build_opener(urllib.request.ProxyHandler({}), _SocksHandler(p), _SocksHTTPSHandler(p),
                                        _WebOnly(), *i2, _Refuse())
 
