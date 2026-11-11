@@ -1026,9 +1026,13 @@ def slug(s, n=60):
 
 
 def safe_filename(s, n=120):
-    s = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", s)
-    s = " ".join(s.split()).strip(" .")
-    return s[:n].strip(" .") or "book"
+    """A plain file name: letters and digits (any language), spaces, _ - . and brackets. Anything else (& , # % ' +
+    and the like) becomes a space: phone apps and file managers trip over such names. (+2 more) -> (and 2 more)."""
+    s = re.sub(r"\(\+(\d+) more\)", r"(and \1 more)", s)
+    s = re.sub(r"[^\w\-.() ]", " ", s)
+    s = " ".join(s.split()).strip(" .-")
+    s = re.sub(r"\(\s*\)", "", s).strip()
+    return s[:n].strip(" .-") or "book"
 
 
 LANG3 = {"en": "eng", "english": "eng", "fr": "fra", "french": "fra", "de": "deu", "german": "deu",
