@@ -2,12 +2,14 @@
 
 Serves the UI on http://127.0.0.1:8765 and runs one conversion job at a time in a child process.
 """
+import errno
 import hashlib
 import json
 import os
 import re
 import shutil
 import signal
+import socket
 import stat as statmod
 import subprocess
 import sys
@@ -962,11 +964,31 @@ class H(BaseHTTPRequestHandler):
 DEFAULTS = {}
 
 
+class _DualStack(ThreadingHTTPServer):
+    """Listens on IPv6 and IPv4 at once: some NAS systems pass requests on to a container over IPv6."""
+    address_family = socket.AF_INET6
+
+    def server_bind(self):
+        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        super().server_bind()
+
+
+def _server():
+    if BIND in ("0.0.0.0", "::"):
+        try:
+            return _DualStack(("::", PORT), H)
+        except OSError as e:
+            if e.errno == errno.EADDRINUSE:
+                raise
+            # no IPv6 in this container: IPv4 only
+    return ThreadingHTTPServer((BIND, PORT), H)
+
+
 def main():
     os.makedirs(C.JOBS, exist_ok=True)
     os.makedirs(C.UPLOADS, exist_ok=True)
     try:
-        srv = ThreadingHTTPServer((BIND, PORT), H)
+        srv = _server()
     except OSError:
         print(f"ZIMaker already seems to be running: open http://127.0.0.1:{PORT}")
         return
