@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import signal
 import socket
@@ -94,6 +95,8 @@ def setup_thread():
 
 # ---- ZIM viewer: opened archives, a remembered library, search
 ZIMS = {}
+DOWNLOADS = {}            # download link -> (file, when it was made)
+DOWNLOAD_TTL = 12 * 3600  # long enough to resume a big download that was interrupted
 LIBRARY = os.path.join(C.HOME, "library.json")
 
 
@@ -711,6 +714,8 @@ class H(BaseHTTPRequestHandler):
             zid = u.path.split("/")[3]
             q = urllib.parse.parse_qs(u.query)
             self._json(zim_search(zid, (q.get("q") or [""])[0], (q.get("kind") or ["full"])[0]))
+        elif u.path.startswith("/download/"):
+            self._send_download(u.path.split("/")[2] if u.path.count("/") == 2 else "")
         elif u.path.startswith("/zim/"):
             parts = u.path.split("/", 3)
             self._send_zim(parts[2] if len(parts) > 2 else "", urllib.parse.unquote(parts[3]) if len(parts) > 3 else "")
@@ -740,6 +745,60 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(b)))
         self.end_headers()
         self.wfile.write(b)
+
+    def _send_download(self, token):
+        """A whole ZIM file as a download (see /api/download). Byte ranges let the browser resume a big one."""
+        hit = DOWNLOADS.get(token)
+        if not hit or time.time() - hit[1] > DOWNLOAD_TTL or not os.path.isfile(hit[0]):
+            b = (b"<!DOCTYPE html><meta charset=utf-8><p style='font-family:sans-serif'>This download link has"
+                 b" expired. Press Download in ZIMaker again.</p>")
+            self.send_response(404)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+            return
+        path = hit[0]
+        total = os.path.getsize(path)
+        start, end, code = 0, total - 1, 200
+        m = re.fullmatch(r"bytes=(\d*)-(\d*)", self.headers.get("Range") or "")
+        if m and total and (m.group(1) or m.group(2)):
+            if m.group(1):
+                start = int(m.group(1))
+                end = min(int(m.group(2)) if m.group(2) else total - 1, total - 1)
+            else:
+                start = max(0, total - int(m.group(2)))
+            if start > end:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{total}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            code = 206
+        name = os.path.basename(path)
+        plain = re.sub(r'[^A-Za-z0-9._ -]', "_", name)
+        self.send_response(code)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Disposition",
+                         f"attachment; filename=\"{plain}\"; filename*=UTF-8''{urllib.parse.quote(name)}")
+        self.send_header("Content-Length", str(end - start + 1 if total else 0))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        if code == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
+        self.end_headers()
+        left = end - start + 1 if total else 0
+        try:
+            with open(path, "rb") as f:
+                f.seek(start)
+                while left > 0:
+                    chunk = f.read(min(left, 1 << 20))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def _send_zim(self, zid, zpath):
         """Serve one entry of an opened ZIM. Scripts inside ZIM content are switched off (CSP sandbox), so a
@@ -852,8 +911,8 @@ class H(BaseHTTPRequestHandler):
                                     "books": [{"title": b["title"], "scans_gb": round(b["archive_size"] / 1e9, 2)}
                                               for b in info["books"]]})
                     elif kind == "lib":
-                        from zc import library
-                        out.append({"input": line, "kind": "lib", "title": library.describe(val), "error": ""})
+                        from zc import library as booklib   # not "library": that name is the list of ZIMs here
+                        out.append({"input": line, "kind": "lib", "title": booklib.describe(val), "error": ""})
                     elif kind == "web":
                         p = web.peek(val)
                         err = "" if p["html"] else "This address isn't a web page"
@@ -947,6 +1006,20 @@ class H(BaseHTTPRequestHandler):
             self._json({"ok": True})
             threading.Thread(target=lambda: (time.sleep(0.5), SERVER["srv"].shutdown()), daemon=True).start()
             return
+        if u.path == "/api/download":
+            # a ZIM ZIMaker made or opened (the library's list, nothing else), saved by the browser: in Docker the
+            # file is on another machine. The browser gets a short-lived link that names no path, so its download
+            # history doesn't record where things are kept.
+            p = str(self._body().get("path", "")).strip()
+            if not p or p not in {z["path"] for z in library()}:
+                return self._json({"error": "That ZIM file isn't in ZIMaker's list any more."}, 400)
+            wp = p if p.startswith("/") else C.to_wsl(p)
+            now = time.time()
+            for t in [t for t, (_, at) in DOWNLOADS.items() if now - at > DOWNLOAD_TTL]:
+                DOWNLOADS.pop(t, None)
+            token = secrets.token_urlsafe(18)
+            DOWNLOADS[token] = (wp, now)
+            return self._json({"url": f"/download/{token}"})
         if u.path == "/api/open":
             # only ever a folder, or a ZIM file's folder: never anything that could be run or opened in a program
             p = str(self._body().get("path", "")).strip()

@@ -85,6 +85,7 @@ body.dragging #drop{display:flex}
 .hdr-btns{display:flex;gap:8px;flex-shrink:0}
 /* in a Docker container there is no desktop: no window of its own, no file manager, nothing to quit */
 body.docker .nodocker,body.docker #quit,body.docker button.libopen,body.docker button.open{display:none!important}
+body:not(.docker) button.dl{display:none!important}
 </style>
 </head>
 <body>
@@ -529,6 +530,15 @@ async function uploadAndOpenZim(f) {
     await openZim(r.path);
   } catch (e) { $("#zimmsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
 }
+// Docker: the ZIM is on the NAS or server, so the browser saves a copy (to its usual downloads folder)
+async function downloadZim(path, msg) {
+  try {
+    const r = await api("/api/download", {method: "POST", body: JSON.stringify({path})});
+    const a = document.createElement("a");
+    a.href = r.url; a.download = ""; a.rel = "noopener";
+    document.body.appendChild(a); a.click(); a.remove();
+  } catch (e) { if (msg) msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; else alert(e.message); }
+}
 async function loadLibrary() {
   const r = await api("/api/zim/library").catch(() => ({items: []}));
   const ticked = new Set([...document.querySelectorAll("#library .pick:checked")].map(b => b.dataset.p));
@@ -538,10 +548,12 @@ async function loadLibrary() {
       <span class="hint">${esc(z.path)}</span></span></label>
       <span style="white-space:nowrap"><button class="preview" data-p="${esc(z.path)}">Preview</button>
       <button class="libedit" data-p="${esc(z.path)}">Edit</button>
-      <button class="libopen" data-p="${esc(z.path)}">Open folder</button></span></li>`).join("")
+      <button class="libopen" data-p="${esc(z.path)}">Open folder</button>
+      <button class="dl" data-p="${esc(z.path)}" title="Save a copy on this computer">Download</button></span></li>`).join("")
     : '<li class="hint">Nothing yet.</li>';
   $("#library").querySelectorAll(".preview").forEach(b => b.onclick = () => openZim(b.dataset.p));
   $("#library").querySelectorAll(".libopen").forEach(b => b.onclick = () => api("/api/open", {method: "POST", body: JSON.stringify({path: b.dataset.p})}));
+  $("#library").querySelectorAll(".dl").forEach(b => b.onclick = () => downloadZim(b.dataset.p, $("#zimmsg")));
   $("#library").querySelectorAll(".pick").forEach(b => b.onchange = showCombine);
   $("#library").querySelectorAll(".libedit").forEach(b => b.onclick = () => openEditor(b.dataset.p));
   showCombine();
@@ -946,7 +958,7 @@ function jobHtml(j) {
   const colour = {done: "good", failed: "err", interrupted: "err", cancelled: "hint"}[j.status] || "";
   const res = j.result || {};
   const fileList = (res.files || []).map(f => `<li><span>${esc(f.path)} <span class="hint">${(f.size / 1e6).toFixed(1)} MB${f.check === "fail" ? " · validation warnings" : ""}</span></span>
-      <span><button class="preview" data-p="${esc(f.path)}">Preview</button> <button class="open" data-p="${esc(f.path)}">Open folder</button></span></li>`).join("");
+      <span><button class="preview" data-p="${esc(f.path)}">Preview</button> <button class="open" data-p="${esc(f.path)}">Open folder</button> <button class="dl" data-p="${esc(f.path)}" title="Save a copy on this computer">Download</button></span></li>`).join("");
   const errs = (res.errors || []).map(e => `<div class="err">${esc(e)}</div>`).join("");
   return `<div class="job" data-id="${j.id}">
     <div class="row" style="justify-content:space-between;margin:0"><b>${esc(j.label)}</b>
@@ -1104,6 +1116,7 @@ async function poll() {
         if (d.open) { openLogs.add(d.dataset.log); poll(); } else openLogs.delete(d.dataset.log);   // fetch its log now
       });
       jobs.querySelectorAll(".open").forEach(b => b.onclick = () => api("/api/open", {method: "POST", body: JSON.stringify({path: b.dataset.p})}));
+      jobs.querySelectorAll(".dl").forEach(b => b.onclick = () => downloadZim(b.dataset.p));
       jobs.querySelectorAll(".preview").forEach(b => b.onclick = () => openZim(b.dataset.p));
       jobs.querySelectorAll(".cancel").forEach(b => b.onclick = () => api(`/api/jobs/${b.dataset.id}/cancel`, {method: "POST"}).then(poll));
       jobs.querySelectorAll(".del").forEach(b => b.onclick = () => api(`/api/jobs/${b.dataset.id}/delete`, {method: "POST"}).then(poll));

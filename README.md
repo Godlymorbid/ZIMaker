@@ -71,6 +71,7 @@ What is different from the desktop versions:
 
 - **Folders.** ZIMaker only sees the folders listed under `volumes`, and in its window paths are the container's: ZIM files are saved to `/output`. Both files have ready-made lines to uncomment for a watched folder (`/watch`) and for a folder of big files to convert by path (`/input`). Dragging files onto the window works as usual.
 - **No Quit, no "Open folder", no browser choice.** It has no window of its own and keeps running without one. Stop it with `docker compose stop`, or from your NAS's container app.
+- **Download** (in the Jobs list and under Open a ZIM) saves a copy of a ZIM file on the computer you're using, in your browser's downloads folder. A big download that is interrupted can be resumed by the browser for 12 hours; after that, press Download again.
 - **Updates.** **Check for updates** tells you when there's a new version. To install it: on a NAS, pull the image again in your Docker app (or `docker compose pull`, then `docker compose up -d`); on your own computer, `git pull`, then `docker compose up -d --build`. Settings, the Jobs list and your ZIM files are kept.
 - **Optional tools** are all part of the image.
 - **Who owns the files.** ZIM files belong to whoever owns the folder they are saved in, so there is normally nothing to set. To choose another user, add `PUID` and `PGID` under `environment:`.
