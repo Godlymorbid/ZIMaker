@@ -31,6 +31,7 @@ BIND = (os.environ.get("ZIMAKER_BIND") or "0.0.0.0") if C.DOCKER else "127.0.0.1
 # another published port, or another computer's name for this one.
 EXTRA_HOSTS = {h.strip().lower() for h in (os.environ.get("ZIMAKER_HOSTS") or "").split(",") if h.strip()} \
     if C.DOCKER else set()
+REFUSED = set()  # host names already reported in the log as refused (each once)
 SETUP = {"state": "starting", "message": "", "zimcheck": False}
 PROCS = {}
 QUEUE = []
@@ -659,7 +660,17 @@ class H(BaseHTTPRequestHandler):
             ok_hosts, ok_origins = {host}, {"http://" + host, "https://" + host}
         if host not in ok_hosts or (origin and origin.lower() not in ok_origins) or \
                 (changes and self.headers.get("X-ZIMaker") != "1"):
-            self._json({"error": "Not allowed: this request didn't come from ZIMaker's own window."}, 403)
+            msg = "Not allowed: this request didn't come from ZIMaker's own window."
+            if C.DOCKER and host not in ok_hosts:
+                # opened under a name ZIMaker doesn't know (a NAS's remote-access link, a reverse proxy): say which,
+                # in the browser and in the container's log, so it can be added
+                msg += (f" It was opened as {host or '(no name)'}; if that is how you open ZIMaker, add"
+                        f" ZIMAKER_HOSTS={host} to the container's environment (see Docker in README.md).")
+                if host not in REFUSED:
+                    REFUSED.add(host)
+                    print(f"Refused a window opened as {host!r} (from {origin or 'no origin'}): add"
+                          f" ZIMAKER_HOSTS={host} to the container's environment if that is you.", flush=True)
+            self._json({"error": msg}, 403)
             return False
         return True
 
